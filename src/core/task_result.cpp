@@ -1,5 +1,7 @@
 #include "taskforge/core/task_result.hpp"
 
+#include <stdexcept>
+
 namespace taskforge::core {
 
 TaskResult TaskResult::create_succeeded(
@@ -10,6 +12,10 @@ TaskResult TaskResult::create_succeeded(
     std::chrono::system_clock::time_point start_time,
     std::chrono::system_clock::time_point end_time,
     std::chrono::milliseconds duration) {
+
+    if (duration < std::chrono::milliseconds{0}) {
+        throw std::invalid_argument("Task duration cannot be negative");
+    }
 
     return TaskResult{
         std::move(id),
@@ -36,6 +42,10 @@ TaskResult TaskResult::create_failed(
     std::chrono::system_clock::time_point start_time,
     std::chrono::system_clock::time_point end_time,
     std::chrono::milliseconds duration) {
+
+    if (duration < std::chrono::milliseconds{0}) {
+        throw std::invalid_argument("Task duration cannot be negative");
+    }
 
     return TaskResult{
         std::move(id),

@@ -81,4 +81,13 @@ TEST_CASE("WorkflowExecution aggregate behavior", "[core][workflow_execution]") 
         CHECK(exec3.workflow_name() == "test_wf");
         CHECK(exec3.task_count() == 1);
     }
+
+    SECTION("total_duration clamps to 0 when end_time is earlier than start_time") {
+        std::unordered_map<TaskId, TaskResult> results;
+        results.emplace(t1, TaskResult::create_succeeded(t1, 0, "ok", "", now, now, dur));
+
+        // end_time is before start_time
+        WorkflowExecution exec("skewed_clock", std::move(results), {t1}, now + dur, now);
+        CHECK(exec.total_duration() == std::chrono::milliseconds{0});
+    }
 }

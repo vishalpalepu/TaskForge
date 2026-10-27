@@ -50,7 +50,8 @@ bool WorkflowExecution::has_failures() const noexcept {
 }
 
 std::chrono::milliseconds WorkflowExecution::total_duration() const noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(end_time_ - start_time_);
+    auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(end_time_ - start_time_);
+    return dur < std::chrono::milliseconds{0} ? std::chrono::milliseconds{0} : dur;
 }
 
 size_t WorkflowExecution::count_with_state(TaskState state) const noexcept {

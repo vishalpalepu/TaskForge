@@ -1,5 +1,7 @@
 #include "taskforge/scheduler/process_executor.hpp"
 
+#include <stdexcept>
+
 namespace taskforge::scheduler {
 
 ExecutionResponse ExecutionResponse::completed(
@@ -7,6 +9,10 @@ ExecutionResponse ExecutionResponse::completed(
     std::string stdout_content,
     std::string stderr_content,
     std::chrono::milliseconds duration) {
+
+    if (duration < std::chrono::milliseconds{0}) {
+        throw std::invalid_argument("Execution duration cannot be negative");
+    }
 
     return ExecutionResponse{
         std::make_optional(exit_code),
@@ -22,6 +28,10 @@ ExecutionResponse ExecutionResponse::launch_failure(
     std::string error_message,
     std::chrono::milliseconds duration) {
 
+    if (duration < std::chrono::milliseconds{0}) {
+        throw std::invalid_argument("Execution duration cannot be negative");
+    }
+
     return ExecutionResponse{
         std::nullopt,
         std::make_optional(os_error_code),
@@ -34,6 +44,10 @@ ExecutionResponse ExecutionResponse::launch_failure(
 ExecutionResponse ExecutionResponse::system_fault(
     std::string error_message,
     std::chrono::milliseconds duration) {
+
+    if (duration < std::chrono::milliseconds{0}) {
+        throw std::invalid_argument("Execution duration cannot be negative");
+    }
 
     return ExecutionResponse{
         std::nullopt,

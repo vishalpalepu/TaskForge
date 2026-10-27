@@ -13,6 +13,9 @@ namespace taskforge::scheduler {
 // ---------------------------------------------------------------------------
 
 WorkflowRunResult WorkflowRunResult::validation_failure(core::ValidationResult result) {
+    if (result.is_valid()) {
+        throw std::invalid_argument("Cannot create a validation_failure WorkflowRunResult with a valid ValidationResult.");
+    }
     return WorkflowRunResult(std::move(result));
 }
 
@@ -144,6 +147,9 @@ WorkflowRunResult WorkflowScheduler::run(const core::WorkflowDefinition& workflo
         }
         auto task_end = std::chrono::system_clock::now();
         auto task_duration = std::chrono::duration_cast<std::chrono::milliseconds>(task_end - task_start);
+        if (task_duration < std::chrono::milliseconds{0}) {
+            task_duration = std::chrono::milliseconds{0};
+        }
         if (resp.duration().count() > 0) {
             task_duration = resp.duration();
         }
@@ -204,44 +210,48 @@ WorkflowRunResult WorkflowScheduler::run(const core::WorkflowDefinition& workflo
 
             // 5. Pruned BFS block propagation to downstream transitive dependents
             std::vector<core::TaskId> block_queue;
+            auto enqueue_blocked = [&](const core::TaskId& dep_id, const core::TaskId& source_id) {
+                auto state = task_states[dep_id];
+
+                // Pruning: skip already terminal nodes (do not re-expand or re-enqueue)
+                if (state == core::TaskState::Blocked ||
+                    state == core::TaskState::Failed ||
+                    state == core::TaskState::Succeeded) {
+                    return;
+                }
+
+                if (state == core::TaskState::Ready) {
+                    throw std::logic_error(
+                        "Internal scheduling invariant violated: task " +
+                        dep_id.value() +
+                        " was Ready when prerequisite failed.");
+                }
+
+                // Node must be Pending -> transition to Blocked immediately upon discovery
+                task_states[dep_id] = core::TaskState::Blocked;
+                results.emplace(
+                    dep_id,
+                    core::TaskResult::create_blocked(
+                        dep_id,
+                        "Prerequisite task " + source_id.value() + " failed"));
+
+                block_queue.push_back(dep_id);
+            };
+
             auto dep_it = dependents.find(current_id);
             if (dep_it != dependents.end()) {
                 for (const auto& dep_id : dep_it->second) {
-                    block_queue.push_back(dep_id);
+                    enqueue_blocked(dep_id, current_id);
                 }
             }
 
             size_t b_idx = 0;
             while (b_idx < block_queue.size()) {
                 core::TaskId blocked_id = block_queue[b_idx++];
-                auto state = task_states[blocked_id];
-
-                // Pruning: skip already terminal nodes (do not re-expand outgoing edges)
-                if (state == core::TaskState::Blocked ||
-                    state == core::TaskState::Failed ||
-                    state == core::TaskState::Succeeded) {
-                    continue;
-                }
-
-                if (state == core::TaskState::Ready) {
-                    throw std::logic_error(
-                        "Internal scheduling invariant violated: task " +
-                        blocked_id.value() +
-                        " was Ready when prerequisite failed.");
-                }
-
-                // Node must be Pending -> transition to Blocked
-                task_states[blocked_id] = core::TaskState::Blocked;
-                results.emplace(
-                    blocked_id,
-                    core::TaskResult::create_blocked(
-                        blocked_id,
-                        "Prerequisite task " + current_id.value() + " failed"));
-
                 auto next_dep_it = dependents.find(blocked_id);
                 if (next_dep_it != dependents.end()) {
                     for (const auto& next_dep_id : next_dep_it->second) {
-                        block_queue.push_back(next_dep_id);
+                        enqueue_blocked(next_dep_id, blocked_id);
                     }
                 }
             }

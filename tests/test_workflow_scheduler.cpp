@@ -347,6 +347,11 @@ TEST_CASE("WorkflowScheduler: Sequential scheduling engine scenarios", "[schedul
         CHECK_FALSE(invalid_res.is_valid());
         CHECK_NOTHROW(invalid_res.validation_result());
         CHECK_THROWS_AS(invalid_res.execution(), std::logic_error);
+
+        // Factory contract: validation_failure rejects valid ValidationResult
+        ValidationResult ok_val;
+        REQUIRE(ok_val.is_valid());
+        CHECK_THROWS_AS(WorkflowRunResult::validation_failure(std::move(ok_val)), std::invalid_argument);
     }
 
     SECTION("Scenario 14: Empty workflow rejected before execution with zero dispatches") {
@@ -359,5 +364,40 @@ TEST_CASE("WorkflowScheduler: Sequential scheduling engine scenarios", "[schedul
         CHECK(executor.execution_count() == 0);
         const auto& val = result.validation_result();
         CHECK(val.has_error_code(ValidationErrorCode::EmptyWorkflow));
+    }
+
+    SECTION("Scenario 15: Dual-root overlapping failure paths to shared join task") {
+        // A1 (fails) -> B1 -> Join -> End
+        // A2 (fails) -> B2 -> Join -> End
+        std::vector<TaskDefinition> tasks;
+        tasks.push_back(TaskDefinition::create(TaskId("A1"), "step A1", "fail1.exe", {}));
+        tasks.push_back(TaskDefinition::create(TaskId("A2"), "step A2", "fail2.exe", {}));
+        tasks.push_back(TaskDefinition::create(TaskId("B1"), "step B1", "b1.exe", {}, std::nullopt, {TaskId("A1")}));
+        tasks.push_back(TaskDefinition::create(TaskId("B2"), "step B2", "b2.exe", {}, std::nullopt, {TaskId("A2")}));
+        tasks.push_back(TaskDefinition::create(TaskId("Join"), "step Join", "join.exe", {}, std::nullopt, {TaskId("B1"), TaskId("B2")}));
+        tasks.push_back(TaskDefinition::create(TaskId("End"), "step End", "end.exe", {}, std::nullopt, {TaskId("Join")}));
+
+        auto workflow = WorkflowDefinition::create("dual_failure_wf", std::move(tasks));
+        executor.set_response_for("fail1.exe", ExecutionResponse::completed(1, "", "fail1", std::chrono::milliseconds{5}));
+        executor.set_response_for("fail2.exe", ExecutionResponse::completed(2, "", "fail2", std::chrono::milliseconds{5}));
+
+        auto result = scheduler.run(workflow);
+
+        REQUIRE(result.is_valid());
+        CHECK_FALSE(result.is_successful());
+        const auto& exec = result.execution();
+
+        CHECK(exec.task_state(TaskId("A1")) == TaskState::Failed);
+        CHECK(exec.task_state(TaskId("A2")) == TaskState::Failed);
+        CHECK(exec.task_state(TaskId("B1")) == TaskState::Blocked);
+        CHECK(exec.task_state(TaskId("B2")) == TaskState::Blocked);
+        CHECK(exec.task_state(TaskId("Join")) == TaskState::Blocked);
+        CHECK(exec.task_state(TaskId("End")) == TaskState::Blocked);
+
+        CHECK(exec.count_with_state(TaskState::Failed) == 2);
+        CHECK(exec.count_with_state(TaskState::Blocked) == 4);
+        CHECK(exec.count_with_state(TaskState::Succeeded) == 0);
+        // Only A1 and A2 were executed
+        CHECK(executor.execution_count() == 2);
     }
 }

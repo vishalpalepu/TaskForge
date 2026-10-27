@@ -19,6 +19,8 @@ namespace taskforge::scheduler {
  */
 class WorkflowRunResult {
 public:
+    /// @brief Creates a failed run result from validation diagnostics.
+    /// @throws std::invalid_argument if result.is_valid() is true.
     [[nodiscard]] static WorkflowRunResult validation_failure(core::ValidationResult result);
     [[nodiscard]] static WorkflowRunResult executed(core::WorkflowExecution execution);
 

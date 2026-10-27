@@ -1,5 +1,6 @@
 #include "taskforge/core/task_result.hpp"
 #include "taskforge/core/task_state.hpp"
+#include "taskforge/scheduler/process_executor.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <sstream>
@@ -138,5 +139,60 @@ TEST_CASE("TaskResult factory invariants and queries", "[core][task_result]") {
         CHECK(res.duration() == std::chrono::milliseconds{0});
         REQUIRE(res.error_message().has_value());
         CHECK(res.error_message().value() == "Prerequisite upstream_task failed");
+    }
+
+    SECTION("rejects negative durations with std::invalid_argument") {
+        auto negative_dur = std::chrono::milliseconds{-10};
+        CHECK_THROWS_AS(
+            TaskResult::create_succeeded(id, 0, "", "", now, now, negative_dur),
+            std::invalid_argument);
+        CHECK_THROWS_AS(
+            TaskResult::create_failed(id, FailureCategory::NonZeroExit, 1, std::nullopt, "", "", "", now, now, negative_dur),
+            std::invalid_argument);
+    }
+}
+
+TEST_CASE("ExecutionResponse factory invariants and negative duration rejection", "[scheduler][process_executor]") {
+    using taskforge::scheduler::ExecutionResponse;
+    auto neg = std::chrono::milliseconds{-1};
+
+    SECTION("rejects negative duration across all factories") {
+        CHECK_THROWS_AS(ExecutionResponse::completed(0, "", "", neg), std::invalid_argument);
+        CHECK_THROWS_AS(ExecutionResponse::launch_failure(2ul, "err", neg), std::invalid_argument);
+        CHECK_THROWS_AS(ExecutionResponse::system_fault("err", neg), std::invalid_argument);
+    }
+
+    SECTION("completed factory invariants") {
+        auto resp = ExecutionResponse::completed(0, "out", "err", std::chrono::milliseconds{10});
+        CHECK(resp.is_successful());
+        CHECK_FALSE(resp.is_launch_failure());
+        CHECK_FALSE(resp.is_system_fault());
+        REQUIRE(resp.exit_code().has_value());
+        CHECK(resp.exit_code().value() == 0);
+        CHECK_FALSE(resp.os_error_code().has_value());
+        CHECK(resp.standard_output() == "out");
+        CHECK(resp.standard_error() == "err");
+        CHECK(resp.duration() == std::chrono::milliseconds{10});
+    }
+
+    SECTION("launch_failure invariants have no fabricated exit code") {
+        auto resp = ExecutionResponse::launch_failure(5ul, "access denied");
+        CHECK_FALSE(resp.is_successful());
+        CHECK(resp.is_launch_failure());
+        CHECK_FALSE(resp.is_system_fault());
+        CHECK_FALSE(resp.exit_code().has_value()); // No fabricated exit code!
+        REQUIRE(resp.os_error_code().has_value());
+        CHECK(resp.os_error_code().value() == 5ul);
+        CHECK(resp.error_message() == "access denied");
+    }
+
+    SECTION("system_fault invariants") {
+        auto resp = ExecutionResponse::system_fault("fatal pipe error");
+        CHECK_FALSE(resp.is_successful());
+        CHECK_FALSE(resp.is_launch_failure());
+        CHECK(resp.is_system_fault());
+        CHECK_FALSE(resp.exit_code().has_value());
+        CHECK_FALSE(resp.os_error_code().has_value());
+        CHECK(resp.error_message() == "fatal pipe error");
     }
 }
