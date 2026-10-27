@@ -131,24 +131,37 @@ classDiagram
     }
 
     class WorkflowExecution {
-        -string execution_id_
-        -const WorkflowDefinition* definition_
+        -string workflow_name_
+        -unordered_map~TaskId, TaskResult~ results_
+        -vector~TaskId~ execution_order_
         -system_clock::time_point start_time_
         -system_clock::time_point end_time_
-        -unordered_map~TaskId, TaskState~ states_
-        -unordered_map~TaskId, TaskResult~ results_
-        +get_state(TaskId) TaskState
-        +transition_task(TaskId, TaskState)
-        +record_result(TaskId, TaskResult)
-        +is_complete() bool
+        +workflow_name() const string&
+        +task_count() size_t
+        +task_state(TaskId) TaskState
+        +task_result(TaskId) const TaskResult*
+        +execution_order() const vector~TaskId~&
+        +is_successful() bool
         +has_failures() bool
+        +total_duration() milliseconds
+        +count_with_state(TaskState) size_t
+    }
+
+    class WorkflowRunResult {
+        -variant~ValidationResult, WorkflowExecution~ result_
+        +is_valid() bool
+        +is_successful() bool
+        +validation_result() const ValidationResult&
+        +execution() const WorkflowExecution&
+        +execution_ptr() const WorkflowExecution*
     }
 
     WorkflowDefinition "1" *-- "many" TaskDefinition : owns values
     TaskDefinition "1" *-- "1" TaskId : identified by
     TaskDefinition "1" o-- "many" TaskId : declares dependency on
-    WorkflowExecution "1" o-- "1" WorkflowDefinition : observes (borrowed ptr)
-    WorkflowExecution "1" *-- "many" TaskResult : owns runtime results
+    WorkflowExecution "1" *-- "many" TaskResult : owns authoritative results (single source of truth)
+    WorkflowRunResult "1" *-- "1" WorkflowExecution : contains when valid
+    WorkflowRunResult "1" *-- "1" ValidationResult : contains when invalid
 ```
 
 ---

@@ -83,7 +83,7 @@ classDiagram
     direction LR
     class IProcessExecutor {
         <<interface>>
-        +execute(ExecutionRequest) ExecutionResponse*
+        +execute(ExecutionRequest) ExecutionResponse
     }
     class WindowsProcessExecutor {
         +execute(ExecutionRequest) ExecutionResponse
@@ -138,26 +138,28 @@ classDiagram
         -unique_ptr~IHistoryRepository~ history_repo_
     }
     class WorkflowScheduler {
-        -IProcessExecutor& executor_ref_
-        -IHistoryRepository& history_ref_
-        +run(const WorkflowDefinition&) WorkflowExecution
+        -IProcessExecutor& executor_
+        +run(const WorkflowDefinition&) WorkflowRunResult
+    }
+    class WorkflowRunResult {
+        -variant~ValidationResult, WorkflowExecution~ result_
+        +is_valid() bool
+        +is_successful() bool
+        +validation_result() const ValidationResult&
+        +execution() const WorkflowExecution&
     }
     class WorkflowExecution {
-        -const WorkflowDefinition* definition_
-        -unordered_map~TaskId, TaskState~ states_
+        -string workflow_name_
         -unordered_map~TaskId, TaskResult~ results_
+        -vector~TaskId~ execution_order_
     }
     class WorkflowDefinition {
         -vector~TaskDefinition~ tasks_
     }
 
-    CliApp *-- IProcessExecutor : exclusive owner (unique_ptr)
-    CliApp *-- IHistoryRepository : exclusive owner (unique_ptr)
-    CliApp --> WorkflowScheduler : instantiates on stack
     WorkflowScheduler o-- IProcessExecutor : borrows reference (&)
-    WorkflowScheduler o-- IHistoryRepository : borrows reference (&)
-    WorkflowScheduler ..> WorkflowExecution : produces by value
-    WorkflowExecution o-- WorkflowDefinition : observes (borrowed ptr)
+    WorkflowScheduler ..> WorkflowRunResult : produces by value
+    WorkflowRunResult *-- WorkflowExecution : contains when valid
     WorkflowDefinition *-- TaskDefinition : value composition (vector)
 ```
 

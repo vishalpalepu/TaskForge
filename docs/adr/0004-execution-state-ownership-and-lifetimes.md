@@ -28,3 +28,20 @@ Additionally, the scheduler must observe `WorkflowDefinition const&` without ris
 ## Consequences
 - **Positive**: Eliminates unnecessary heap allocations; improves cache locality; guarantees deterministic lifetime and ownership hierarchies with zero `std::shared_ptr`.
 - **Negative**: Callers must ensure `WorkflowDefinition` remains in scope for the duration of the synchronous `run()` invocation.
+
+## Amendment (Milestone 2): Discriminated `WorkflowRunResult` via `std::variant`
+
+In the initial proposal, `WorkflowRunResult` was conceived as a struct containing `ValidationResult validation` and `std::optional<WorkflowExecution> execution`. Unrestricted public fields permitted contradictory combinations (e.g. invalid validation paired with a partial execution).
+
+To enforce internal consistency and mutual exclusivity under C++20 without relying on C++23 `std::expected`:
+1. `WorkflowRunResult` encapsulates a discriminated union `std::variant<core::ValidationResult, core::WorkflowExecution>`.
+2. Controlled construction is enforced through static factory methods:
+   - `WorkflowRunResult::validation_failure(core::ValidationResult)`
+   - `WorkflowRunResult::executed(core::WorkflowExecution)`
+3. Query methods guarantee type safety and clear state discrimination:
+   - `is_valid()` returns `true` if and only if the workflow passed validation and an execution aggregate was produced.
+   - `is_successful()` returns `true` if and only if `is_valid()` is `true` and every task completed with `TaskState::Succeeded`.
+   - `validation_result()` throws `std::logic_error` if called on a valid run.
+   - `execution()` throws `std::logic_error` if called on an invalid run.
+   - `execution_ptr()` returns `const WorkflowExecution*` or `nullptr` for non-throwing access.
+

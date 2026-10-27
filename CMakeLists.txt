@@ -20,12 +20,32 @@ add_library(taskforge_core
     src/core/dependency_graph.cpp
     src/core/validation_error.cpp
     src/core/workflow_validator.cpp
+    src/core/task_state.cpp
+    src/core/task_result.cpp
+    src/core/workflow_execution.cpp
 )
 
 target_include_directories(taskforge_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+)
+
+# Sequential Scheduler Library
+add_library(taskforge_scheduler
+    src/scheduler/process_executor.cpp
+    src/scheduler/workflow_scheduler.cpp
+)
+
+target_include_directories(taskforge_scheduler
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(taskforge_scheduler
+    PUBLIC
+        taskforge_core
 )
 
 # Testing configuration

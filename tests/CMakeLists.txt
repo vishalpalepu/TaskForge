@@ -13,11 +13,20 @@ add_executable(taskforge_tests
     test_workflow_definition.cpp
     test_dependency_graph.cpp
     test_workflow_validator.cpp
+    test_task_state.cpp
+    test_workflow_execution.cpp
+    test_workflow_scheduler.cpp
+)
+
+target_include_directories(taskforge_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(taskforge_tests
     PRIVATE
         taskforge_core
+        taskforge_scheduler
         Catch2::Catch2WithMain
 )
 
