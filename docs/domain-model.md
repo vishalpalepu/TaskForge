@@ -4,11 +4,11 @@
 
 The TaskForge domain adheres strictly to **object-oriented encapsulation**, **strong typing**, **value semantics**, and **explicit lifecycle state modeling**.
 
-To ensure high architectural integrity, the domain strictly enforces the following core distinctions:
+To ensure high architectural integrity, the domain strictly enforces seven core distinctions:
 
 ### A. Workflow Definitions vs. Execution Instances
 - **`WorkflowDefinition` (Design-Time Blueprint)**: Immutable, stateless, and thread-safe. Represents the *specification* of tasks, executables, arguments, working directories, and dependencies. It contains no concept of time, process IDs, exit codes, or completion status.
-- **`WorkflowExecution` (Runtime State)**: Ephemeral, mutable state tracking a single execution session. Captures wall-clock timestamps, current task states (`TaskState`), process exit codes, captured stdout/stderr, and terminal diagnostics. It references the definition but never modifies it.
+- **`WorkflowExecution` (Runtime State)**: Ephemeral, mutable state tracking a single execution session. Captures wall-clock timestamps, current task states (`TaskState`), failure categories (`FailureCategory`), process exit codes, captured stdout/stderr, and terminal diagnostics. It references the definition but never modifies it.
 
 ### B. Task Identity vs. Task Ownership
 - **`TaskId` (Identity)**: A lightweight, copyable value type wrapping a validated identifier string (e.g. `"compile_engine"`). Used for referencing, querying, logging, and dependency declarations.
@@ -18,8 +18,8 @@ To ensure high architectural integrity, the domain strictly enforces the followi
 - In naive OOP, tasks might hold raw pointers or `shared_ptr` to their prerequisites. This couples graph relationships with memory allocation lifetimes.
 - In TaskForge, **ownership is a strict hierarchy** (`WorkflowDefinition` owns all tasks), while **dependencies are relational** (`TaskId` edges in a directed adjacency graph). Tasks have zero pointer awareness of each other, completely eliminating cyclic references and dangling pointers.
 
-### D. Failed Tasks vs. Tasks Blocked by Failed Prerequisites
-- **`Failed`**: The task was actually scheduled and executed, but exited with non-zero exit code or encountered an OS launch error.
+### D. Active Failure vs. Dependency Block
+- **`Failed`**: The task was actually scheduled and attempted. It either failed to launch at the OS level (e.g., executable not found) or launched and terminated with a non-zero exit code.
 - **`Blocked`**: The task was **never executed** because at least one prerequisite failed or was blocked. Distinguishing `Blocked` from `Failed` is critical for accurate developer diagnostics and preventing hazardous downstream side effects.
 
 ### E. Transient Task State vs. Persisted Execution History
@@ -30,6 +30,10 @@ To ensure high architectural integrity, the domain strictly enforces the followi
 - External OS commands (`cmake`, `git`, `ninja`) perform arbitrary side effects on disk and environment.
 - A saved history record answers *"What happened in run X?"* (read-only audit).
 - Resuming or re-executing a workflow cannot assume that past tasks left the environment in a clean state. External commands are not assumed to be idempotent.
+
+### G. Immutability via Interface vs. The `const` Member Anti-Pattern
+- To guarantee immutability, classes expose **read-only const accessors** and private non-const member variables.
+- Making member variables `const` inside a class deletes default move-assignment operators, prevents `std::swap`, and breaks vector reallocation. True value semantics are preserved by keeping members non-const, validating invariants during construction, and omitting mutator methods.
 
 ---
 
@@ -53,12 +57,14 @@ classDiagram
         -vector~string~ arguments_
         -optional~path~ working_directory_
         -vector~TaskId~ dependencies_
+        -size_t declaration_index_
         +id() const TaskId&
         +description() const string&
         +executable() const path&
         +arguments() const vector~string~&
         +working_directory() const optional~path~&
         +dependencies() const vector~TaskId~&
+        +declaration_index() size_t
     }
 
     class WorkflowDefinition {
@@ -69,6 +75,7 @@ classDiagram
         +tasks() const vector~TaskDefinition~&
         +find_task(TaskId) const optional~TaskDefinition~
         +has_task(TaskId) bool
+        +declaration_index_of(TaskId) size_t
         +task_count() size_t
     }
 
@@ -83,10 +90,21 @@ classDiagram
         Skipped
     }
 
+    class FailureCategory {
+        <<enumeration>>
+        None
+        LaunchError
+        NonZeroExit
+        Timeout
+        SystemFault
+    }
+
     class TaskResult {
         -TaskId task_id_
         -TaskState final_state_
+        -FailureCategory failure_category_
         -optional~int~ exit_code_
+        -optional~unsigned long~ os_error_code_
         -system_clock::time_point start_time_
         -system_clock::time_point end_time_
         -milliseconds duration_
@@ -95,13 +113,18 @@ classDiagram
         -optional~string~ error_message_
         +task_id() const TaskId&
         +final_state() TaskState
+        +failure_category() FailureCategory
         +exit_code() optional~int~
+        +os_error_code() optional~unsigned long~
         +standard_output() string_view
         +standard_error() string_view
+        +is_launch_failure() bool
+        +is_execution_failure() bool
     }
 
     class WorkflowExecution {
         -string execution_id_
+        -const WorkflowDefinition* definition_
         -system_clock::time_point start_time_
         -system_clock::time_point end_time_
         -unordered_map~TaskId, TaskState~ states_
@@ -116,104 +139,69 @@ classDiagram
     WorkflowDefinition "1" *-- "many" TaskDefinition : owns values
     TaskDefinition "1" *-- "1" TaskId : identified by
     TaskDefinition "1" o-- "many" TaskId : declares dependency on
-    WorkflowExecution "1" o-- "1" WorkflowDefinition : observes (const ref)
+    WorkflowExecution "1" o-- "1" WorkflowDefinition : observes (borrowed ptr)
     WorkflowExecution "1" *-- "many" TaskResult : owns runtime results
 ```
 
 ---
 
-## 3. Detailed Entity & Value Object Specifications
+## 3. Failure Semantics & Categorization
 
-### 3.1 `TaskId` (Strong Value Type)
-- **Role**: Distinct, strongly-typed identifier representing a unique task within a workflow.
-- **Why a dedicated type?** 
-  - Prevents string mix-ups (e.g. passing a path where a task ID was expected).
-  - Enforces identifier invariants upon construction (non-empty, characters in `[a-zA-Z0-9_\-\.]+`).
-- **Semantics**: Copyable, movable, comparable (`operator==`, `operator<=>` or `operator<`), hashable (`std::hash<TaskId>`).
-- **Ownership**: Passed by value or `const&`. Zero dynamic heap allocation beyond internal small-string storage.
+A task in `TaskState::Failed` must unambiguously preserve *why* it failed.
 
-### 3.2 `TaskDefinition` (Immutable Value Object)
-- **Role**: Complete immutable description of a single unit of execution.
-- **Attributes**:
-  - `id`: `TaskId` (Unique identifier).
-  - `description`: `std::string` (Human-readable description).
-  - `executable`: `std::filesystem::path` (Executable file or system tool).
-  - `arguments`: `std::vector<std::string>` (Command-line arguments).
-  - `working_directory`: `std::optional<std::filesystem::path>` (Working directory; inherits if `std::nullopt`).
-  - `dependencies`: `std::vector<TaskId>` (Prerequisite task IDs).
-- **Why NOT a Class Hierarchy?**
-  - Command tasks in an orchestrator differ only in *data* (executable, arguments, environment), not in *runtime polymorphic behavior*. Every command is an external OS process invocation with inputs, environment, and outputs.
-  - Modeling `TaskDefinition` as an immutable value object eliminates virtual table overhead, enables simple deep copying/moving, provides contiguous memory layout in `std::vector`, and simplifies JSON serialization.
-- **Invariants**:
-  - `id` must be valid and non-empty.
-  - `executable` must not be empty.
-  - A task cannot depend on itself (`dependency != id`).
-
-### 3.3 `WorkflowDefinition` (Aggregate Root)
-- **Role**: Represents a validated, immutable task graph configuration.
-- **Attributes**:
-  - `name`: `std::string` (Name of the workflow).
-  - `tasks`: `std::vector<TaskDefinition>` (Collection of tasks).
-  - `lookup_index`: Internal map `std::unordered_map<TaskId, size_t>` for $O(1)$ task lookups.
-- **Invariants**:
-  1. **Uniqueness**: All `TaskDefinition::id` values in the workflow must be distinct.
-  2. **Referential Integrity**: Every `TaskId` in every `dependencies` list must match an existing `TaskDefinition::id` within the same workflow.
-  3. **Acyclicity**: The dependency relationships must form a Directed Acyclic Graph (DAG). There must be no direct or indirect cycles ($A \rightarrow B \rightarrow A$).
-  4. **Non-Empty**: The workflow must contain at least one task.
-
-### 3.4 `TaskState` (Explicit Lifecycle State)
-- **Role**: Explicit Finite State Machine enumeration representing the lifecycle of each task during execution.
-- **States**:
-  - `Pending`: Initial state. The task is waiting for prerequisites to evaluate.
-  - `Ready`: All prerequisites have transitioned to `Succeeded`. The task is eligible to run.
-  - `Running`: The task's process has been launched and is actively executing.
-  - `Succeeded`: The task process exited cleanly (exit code 0).
-  - `Failed`: The task process exited with non-zero exit code or failed to launch.
-  - `Blocked`: The task was never launched because at least one prerequisite was `Failed` or `Blocked`.
-  - `Skipped`: The task was explicitly skipped (future extension).
-
----
-
-## 4. State Transitions and Lifecycle Rules
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pending : Workflow Initialized
-    Pending --> Ready : All prerequisites Succeeded
-    Pending --> Blocked : Any prerequisite Failed or Blocked
-    Ready --> Running : Scheduler dispatches process
-    Running --> Succeeded : Process exited code == 0
-    Running --> Failed : Process exited code != 0 or launch error
-    Succeeded --> [*] : Terminal State
-    Failed --> [*] : Terminal State
-    Blocked --> [*] : Terminal State
+### 3.1 `FailureCategory`
+```cpp
+enum class FailureCategory {
+    None,         // Succeeded, Blocked, or Skipped
+    LaunchError,  // OS failed to spawn process (binary not found, access denied, bad path)
+    NonZeroExit,  // Process spawned and ran, but terminated with non-zero exit code
+    Timeout,      // Process ran but exceeded maximum configured wall-clock time
+    SystemFault   // Win32 pipe broken, IO error, handle exhaustion
+};
 ```
 
-### Transition Invariants
-1. **Monotonic Progression**: Tasks only move forward through the lifecycle; they never regress to an earlier state without an explicit re-run policy.
-2. **Terminal State Immutability**: `Succeeded`, `Failed`, and `Blocked` are terminal states. Once entered, no further state transitions are permitted for that task within that run.
-3. **Execution Precondition**: A task can transition to `Running` **if and only if** its current state is `Ready`.
-4. **Block Propagation**: If a task transitions to `Failed` or `Blocked`, every downstream task that directly or transitively depends on it must transition from `Pending` directly to `Blocked`. Independent branches must remain untouched.
+### 3.2 Distinguishing Failure Modes in `TaskResult`
+
+| Failure Mode | `final_state` | `failure_category` | `exit_code` | `os_error_code` | `error_message` |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Clean Success** | `Succeeded` | `None` | `0` | `nullopt` | `nullopt` |
+| **Launch Error** (e.g. missing binary) | `Failed` | `LaunchError` | `nullopt` (no process ran) | Win32 `GetLastError()` (e.g. `2`) | `"CreateProcessW failed: The system cannot find the file specified."` |
+| **Execution Error** (e.g. compiler failed) | `Failed` | `NonZeroExit` | Process return code (e.g. `1`) | `nullopt` | `"Process exited with code 1"` |
+| **Prerequisite Failed** | `Blocked` | `None` | `nullopt` | `nullopt` | `"Blocked: Prerequisite 'compile' failed."` |
+
+This guarantees that:
+1. `TaskResult::is_launch_failure()` returns `true` if and only if `failure_category == FailureCategory::LaunchError`.
+2. `exit_code` is never fabricated for commands that never launched.
+3. Downstream tasks are marked `Blocked` identically regardless of whether the prerequisite failed due to a launch error or a non-zero exit code.
 
 ---
 
-## 5. `TaskResult` and `WorkflowExecution`
+## 4. Deterministic Scheduling & Tie-Breaking Order
 
-### 5.1 `TaskResult` (Value Object)
-Records the complete outcome of a task execution:
-- `task_id`: `TaskId`
-- `final_state`: `TaskState` (`Succeeded`, `Failed`, or `Blocked`)
-- `exit_code`: `std::optional<int>` (`nullopt` if blocked or failed before launch)
-- `start_time`: `std::chrono::system_clock::time_point`
-- `end_time`: `std::chrono::system_clock::time_point`
-- `duration`: `std::chrono::milliseconds`
-- `stdout_content`: `std::string`
-- `stderr_content`: `std::string`
-- `error_message`: `std::optional<std::string>` (Diagnostic message if process failed to spawn or OS call failed)
+When multiple tasks become `Ready` simultaneously (e.g. at the start of a workflow or when a shared bottleneck task completes), the scheduler must dispatch them in a **100% deterministic order**.
 
-### 5.2 `WorkflowExecution` (Runtime Aggregate)
-- **Role**: Tracks dynamic execution state during a run session.
-- **Separation of Concerns**:
-  - `WorkflowDefinition` is **immutable design-time data** (thread-safe, reusable across multiple runs).
-  - `WorkflowExecution` is **mutable runtime state** (tracks current states, collected results, and execution timestamps for a specific run).
-- **Ownership**: Owns the state map `std::unordered_map<TaskId, TaskState>` and results map `std::unordered_map<TaskId, TaskResult>`. Holds a `WorkflowDefinition const&` reference to the definition being executed.
+### Ordering Invariants:
+1. **Primary Tie-Breaker — Declaration Order**:
+   - Tasks are evaluated in the order they were defined in the workflow manifest (`declaration_index`).
+   - If Task $A$ (index 0) and Task $B$ (index 1) are both ready, Task $A$ is guaranteed to execute before Task $B$.
+2. **Secondary Tie-Breaker — Lexicographical `TaskId`**:
+   - If declaration index is identical or unavailable, tasks are ordered alphabetically by `id.value()`.
+3. **No `std::unordered_map` Order Dependence**:
+   - The scheduler ready queue is an ordered data structure (`std::vector<TaskId>` sorted via comparator, or `std::set<TaskId, DeterministicOrder>`).
+   - Iteration order is independent of memory address layout, hash seeds, standard library implementations, or compiler versions.
+
+---
+
+## 5. Value Semantics & Invariant Protection
+
+To balance strict invariant protection with idiomatic Modern C++ performance:
+
+1. **Non-Const Private Member Variables**:
+   - Member variables are non-const, allowing `TaskDefinition` and `WorkflowDefinition` to be moved efficiently (`std::move`), swapped (`std::swap`), and reallocated within `std::vector` without deep copies.
+2. **Encapsulated Construction**:
+   - Objects are constructed through validated factory functions (e.g., `TaskDefinition::create(...)` and `WorkflowDefinition::create(...)`).
+   - Validation ensures non-empty IDs, non-empty executables, self-dependency prevention, and DAG acyclicity before the object is instantiated.
+3. **Immutability through Const-Only Interfaces**:
+   - No setters or mutators are provided.
+   - All accessors return `const&` or value copies.
+   - The aggregate is completely immutable to external consumers after construction.

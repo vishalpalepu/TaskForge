@@ -31,13 +31,18 @@ Key architectural distinctions:
 2. **Task Identity vs. Task Ownership**: Lightweight `TaskId` value tokens vs. vector-owned `TaskDefinition` containers.
 3. **Dependencies vs. Ownership**: Tasks reference each other only via IDs in a graph; tasks never hold pointers to other tasks.
 4. **Policy vs. Mechanism**: Scheduler evaluates readiness; `IProcessExecutor` spawns processes. Tested via `FakeProcessExecutor`.
-5. **Failed vs. Blocked**: A task is `Failed` if its process returned non-zero; it is `Blocked` if it was aborted because a prerequisite failed.
+5. **Failed vs. Blocked**: A task is `Failed` if its process launch failed or returned non-zero; it is `Blocked` if it was aborted because a prerequisite failed.
 6. **Audit Replay vs. Safe Repeat**: History files provide read-only post-mortems; external commands are not assumed to be idempotent.
 
 Detailed documentation is available in the [`docs/`](docs/) directory:
 - [Project Vision & Scope](docs/project-vision.md)
 - [Domain Model & Lifecycle Invariants](docs/domain-model.md)
 - [Architecture & Design Decisions](docs/architecture.md)
+- Architecture Decision Records:
+  - [ADR 0001: Value Semantics and Invariant Protection](docs/adr/0001-value-semantics-and-immutability.md)
+  - [ADR 0002: Deterministic Scheduling Order](docs/adr/0002-deterministic-scheduling-order.md)
+  - [ADR 0003: Failure Categorization and Blocked Propagation](docs/adr/0003-failure-categorization-and-blocked-propagation.md)
+  - [ADR 0004: Execution State Ownership and Lifetimes](docs/adr/0004-execution-state-ownership-and-lifetimes.md)
 
 ---
 

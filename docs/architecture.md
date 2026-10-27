@@ -21,7 +21,7 @@ The architecture enforces seven essential distinctions:
 | **3. Dependencies vs. Ownership** | Dependency Graph (`TaskId` $\rightarrow$ `TaskId`) | Ownership Tree (`Workflow` owns `vector<Task>`) | Tasks do not hold pointers or references to other tasks. Graph algorithms operate on ID adjacency tables. |
 | **4. Scheduling Policy vs. Mechanism** | `WorkflowScheduler` (Readiness & failure logic) | `IProcessExecutor` (OS process execution) | Scheduler logic is tested instantaneously in memory with zero OS calls using `FakeProcessExecutor`. |
 | **5. Runtime State vs. Persisted History** | `TaskState` (In-memory FSM) | `FileHistoryRepository` (Durable JSON journal) | Core engine remains independent of disk persistence, directories, and serialization schemas. |
-| **6. Active Failure vs. Dependency Block** | `Failed` (Process executed and failed) | `Blocked` (Prerequisite failed; never executed) | Eliminates user confusion; independent branches continue executing while downstream dependents of failed tasks abort safely. |
+| **6. Active Failure vs. Dependency Block** | `Failed` (Launch error or non-zero exit code) | `Blocked` (Prerequisite failed; never executed) | Eliminates user confusion; independent branches continue executing while downstream dependents of failed tasks abort safely. |
 | **7. Historical Audit vs. Safe Command Repeat** | Saved Execution Record (Inspection) | Re-executing External Command (Side effects) | Historical logs provide post-mortem auditing; re-running external commands is never assumed to be idempotent. |
 
 ---
@@ -44,7 +44,7 @@ graph TD
     end
 
     subgraph Orchestration_Layer["Orchestration Layer"]
-        Engine["WorkflowScheduler / ExecutionEngine"]
+        Engine["WorkflowScheduler"]
         IExec["<<interface>><br/>IProcessExecutor"]
         IHistory["<<interface>><br/>IHistoryRepository"]
     end
@@ -122,7 +122,7 @@ classDiagram
 | **`WorkflowValidator`** | Semantic validation rules | Concrete Class | Deterministic domain logic. No interface needed. |
 | **`WorkflowScheduler`** | Task readiness and lifecycle coordination | Concrete Class | Orchestration core. Sequential scheduling is direct; parallel scheduler can be introduced in Milestone 6 without premature interface pollution. |
 | **`IProcessExecutor`** | Child process execution boundary | **Abstract Interface** | **JUSTIFIED**: Isolates Win32 OS calls (`CreateProcessW`) from scheduling policy; enables `FakeProcessExecutor` for instant, deterministic unit testing without spawning real OS processes. |
-| **`IHistoryRepository`** | Execution history persistence | **Abstract Interface** | **JUSTIFIED**: Isolates file I/O from execution flow; enables `InMemoryHistoryRepository` for testing without disk pollution. |
+| **`IHistoryRepository`** | Execution history persistence | **Abstract Interface** | **JUSTIFIED**: Isolates file I/O from execution; enables `InMemoryHistoryRepository` for tests without polluting local disk. |
 | **`WorkflowParser`** | JSON deserialization via `nlohmann/json` | Concrete Class | JSON is the project manifest format. Avoids premature `IParser` until multiple formats are genuinely required. |
 | **`ConsoleReporter`** | Terminal formatting & progress output | Concrete Class | Parameterized by `std::ostream&` (defaults to `std::cout`). Fully testable using `std::ostringstream` without an interface. |
 
@@ -140,10 +140,10 @@ classDiagram
     class WorkflowScheduler {
         -IProcessExecutor& executor_ref_
         -IHistoryRepository& history_ref_
-        -unique_ptr~WorkflowExecution~ active_execution_
+        +run(const WorkflowDefinition&) WorkflowExecution
     }
     class WorkflowExecution {
-        -const WorkflowDefinition* definition_ptr_
+        -const WorkflowDefinition* definition_
         -unordered_map~TaskId, TaskState~ states_
         -unordered_map~TaskId, TaskResult~ results_
     }
@@ -156,32 +156,116 @@ classDiagram
     CliApp --> WorkflowScheduler : instantiates on stack
     WorkflowScheduler o-- IProcessExecutor : borrows reference (&)
     WorkflowScheduler o-- IHistoryRepository : borrows reference (&)
-    WorkflowScheduler *-- WorkflowExecution : owns for run lifetime (unique_ptr)
-    WorkflowExecution o-- WorkflowDefinition : observes (const ref/ptr)
+    WorkflowScheduler ..> WorkflowExecution : produces by value
+    WorkflowExecution o-- WorkflowDefinition : observes (borrowed ptr)
     WorkflowDefinition *-- TaskDefinition : value composition (vector)
 ```
 
-### Ownership & Lifetime Rules
+### 5.1 Ownership Decision: `WorkflowExecution` by Value vs. `std::unique_ptr`
 
-1. **Unique Ownership (`std::unique_ptr`)**: Used strictly when polymorphic lifetimes must be managed dynamically across boundaries:
-   - `CliApp` owns `std::unique_ptr<IProcessExecutor>` and `std::unique_ptr<IHistoryRepository>`.
-   - `WorkflowScheduler` creates and owns `std::unique_ptr<WorkflowExecution>` during a run session.
-2. **Borrowed References (`&` / `const&`)**:
-   - `WorkflowScheduler` receives `IProcessExecutor&` and `IHistoryRepository&` by borrowed reference. It never takes ownership; the caller guarantees lifetime during the execution scope.
-   - `WorkflowExecution` observes `WorkflowDefinition const&`. The definition remains alive for the duration of the run.
-3. **Value Semantics**:
-   - `TaskDefinition`, `TaskId`, and `TaskResult` are stored directly in standard containers (`std::vector`, `std::unordered_map`).
-   - Move semantics (`std::move`) transfer ownership into aggregates during parsing and result collection.
-4. **No `std::shared_ptr`**:
-   - Zero shared ownership in the core engine. Lifetimes are strictly hierarchical and deterministic.
-5. **RAII Operating System Resource Wrappers**:
-   - Windows process handles (`HANDLE`) and pipe endpoints are managed via move-only RAII wrappers (`ScopedHandle` closing via `CloseHandle()`) to guarantee zero handle leaks on failure or early return.
+We explicitly evaluated whether `WorkflowScheduler` should own `WorkflowExecution` via `std::unique_ptr<WorkflowExecution>` or manage it **directly by value**:
+
+| Criteria | `std::unique_ptr<WorkflowExecution>` | `WorkflowExecution` by Value | Evaluation |
+| :--- | :--- | :--- | :--- |
+| **Memory Allocation** | Requires separate heap allocation (`new`) | Zero separate heap allocation; lives in local frame / stack | **By Value wins**: Avoids unnecessary dynamic allocation. |
+| **Polymorphism** | Pointer allows polymorphic dispatch | Concrete type only | **By Value wins**: `WorkflowExecution` is not polymorphic; no interface exists or is needed. |
+| **Indirection & Cache** | Incurs pointer indirection (`->`) | Direct cache-friendly value access (`.`) | **By Value wins**: Simpler debugging and higher locality. |
+| **Lifecycle & Transfer** | Move ownership via pointer | Move ownership via C++20 move semantics (`std::move`) | **By Value wins**: Natural return type: `WorkflowExecution WorkflowScheduler::run(const WorkflowDefinition&)`. |
+
+**Decision**: `WorkflowExecution` is managed and returned **directly by value**. The scheduler constructs it as a local variable during `run()`, populates it throughout the execution loop, and returns it by value using move semantics to `CliApp`.
+
+### 5.2 Lifetime Guarantee for Borrowed `WorkflowDefinition const&`
+
+The scheduler and the active execution observe `WorkflowDefinition const&`. We guarantee zero dangling references through strict stack scoping:
+
+1. **Owner**: `CliApp` parses the manifest and stores `WorkflowDefinition definition` as a local stack variable in `CliApp::run_command(...)`.
+2. **Call Scope**: `CliApp` invokes `scheduler.run(definition)`.
+3. **Guarantee**: Because `definition` is owned by the enclosing caller frame on the stack, its lifetime strictly supersedes the entire duration of `scheduler.run()`.
+4. **Execution Snapshot**: Once `run()` completes and returns `WorkflowExecution`, if the execution must be inspected later or persisted to disk, `WorkflowExecution` stores all necessary summary data (task IDs, exit codes, output) by value. It does not attempt to extend the lifetime of `WorkflowDefinition`.
 
 ---
 
-## 6. Target Environment & Windows-Native Toolchain
+## 6. Deterministic Scheduling & Tie-Breaking Order
 
-### 6.1 Toolchain Reconnaissance Findings
+To guarantee repeatable, deterministic execution across all platforms and runs:
+
+1. **The Hash Table Trap**: Iterating over `std::unordered_map` has an undefined, implementation-dependent order that varies with hashing seeds, standard library versions, and bucket allocations. It must **never** be used to select the next ready task.
+2. **Two-Tier Deterministic Ordering Policy**:
+   - **Primary Key**: **Declaration Index** in the workflow manifest. Tasks preserve their original sequence as parsed into `std::vector<TaskDefinition>`.
+   - **Secondary Key**: **Lexicographical `TaskId`**. If declaration indices are identical or unavailable, tasks are ordered alphabetically by `id.value()`.
+3. **Ready Queue Data Structure**:
+   ```cpp
+   struct DeterministicTaskOrder {
+       const WorkflowDefinition* workflow;
+       bool operator()(const TaskId& lhs, const TaskId& rhs) const {
+           size_t idx_lhs = workflow->declaration_index_of(lhs);
+           size_t idx_rhs = workflow->declaration_index_of(rhs);
+           if (idx_lhs != idx_rhs) return idx_lhs < idx_rhs;
+           return lhs.value() < rhs.value();
+       }
+   };
+   // Ready queue maintains strict deterministic priority
+   std::set<TaskId, DeterministicTaskOrder> ready_queue;
+   ```
+4. **Verification**: Automated unit tests assert that independent tasks with zero prerequisites declared in order $[C, A, B]$ execute in the exact order $C \rightarrow A \rightarrow B$.
+
+---
+
+## 7. Invariant Protection & Value Semantics
+
+### The `const` Member Anti-Pattern
+Declaring member variables `const` inside a class (e.g. `const TaskId id_;`) is an anti-pattern in Modern C++:
+- It deletes default move-assignment (`operator=(Type&&)`) and copy-assignment.
+- It disables `std::swap` and breaks `std::vector` reallocation, forcing expensive deep copies instead of zero-cost moves.
+
+### The Correct Value-Semantic Architecture
+1. **Private Non-Const Members**:
+   ```cpp
+   class TaskDefinition {
+   private:
+       TaskId id_;
+       std::string description_;
+       std::filesystem::path executable_;
+       std::vector<std::string> arguments_;
+       std::optional<std::filesystem::path> working_directory_;
+       std::vector<TaskId> dependencies_;
+       size_t declaration_index_{0};
+   };
+   ```
+2. **Construction-Time Invariant Enforcement**:
+   - Private constructor accessible only via static factory functions (`TaskDefinition::create(...)`).
+   - Rejects empty IDs, empty executables, invalid characters, and self-dependencies before the object is created.
+3. **Const-Only Observers**:
+   - Read-only accessors (`const TaskId& id() const noexcept`).
+   - No setters or mutators.
+   - Once constructed, `TaskDefinition` and `WorkflowDefinition` are externally immutable while remaining fully copyable, movable, and assignable.
+
+---
+
+## 8. Failure Semantics & Categorization
+
+To ensure actionable post-mortem diagnostics, `TaskResult` distinguishes between process-launch failures and execution failures:
+
+```cpp
+enum class FailureCategory {
+    None,         // Succeeded, Blocked, or Skipped
+    LaunchError,  // OS failed to create process (binary missing, permissions, bad path)
+    NonZeroExit,  // Process launched and exited with non-zero return code
+    Timeout,      // Process exceeded configured wall-clock limit
+    SystemFault   // Win32 pipe broken, IO error, handle exhaustion
+};
+```
+
+### Invariant Rules:
+- If `failure_category == LaunchError`: `exit_code` is `std::nullopt` (no process ever ran); `os_error_code` contains Win32 `GetLastError()`; `error_message` contains the system error string.
+- If `failure_category == NonZeroExit`: `exit_code` contains the process return code (e.g., `1`); `os_error_code` is `std::nullopt`.
+- In both failure cases, the task enters `TaskState::Failed`, immediately causing all dependent tasks to transition to `TaskState::Blocked`.
+
+---
+
+## 9. Target Environment & Windows-Native Toolchain
+
+### 9.1 Toolchain Reconnaissance Findings
 A deep forensic inspection of the host Windows environment was performed:
 - `git.exe` (v2.48.1) is installed and available in PATH.
 - `vswhere.exe` is absent from all standard locations (`%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\` and user directories).
@@ -189,7 +273,7 @@ A deep forensic inspection of the host Windows environment was performed:
 - Windows Kits contains only an empty catalog; the Windows SDK developer headers and libraries are absent.
 - Visual Studio IDE and Visual Studio Build Tools are **genuinely not installed** on this machine (only VC++ runtime redistributables and VS Code exist).
 
-### 6.2 Required Windows Setup (To be performed by user)
+### 9.2 Required Windows Setup (To be performed by user)
 To build and test TaskForge natively using MSVC and CMake, run the following commands in an elevated PowerShell:
 
 ```powershell
@@ -206,7 +290,7 @@ After installation, developer tools are accessed via:
 
 ---
 
-## 7. Windows Process Execution & Pipe Management
+## 10. Windows Process Execution & Pipe Management
 
 The `WindowsProcessExecutor` implements `IProcessExecutor` directly using Win32 APIs:
 
@@ -217,33 +301,23 @@ The `WindowsProcessExecutor` implements `IProcessExecutor` directly using Win32 
 2. **Standard Output and Error Capture**:
    - Creates two anonymous pipes via `CreatePipe`: one for stdout, one for stderr.
    - Ensures the write end is inheritable, while the read end is non-inheritable (`SetHandleInformation`).
-   - Concurrently reads from both pipes (or uses overlapping/asynchronous reading) to prevent child process deadlocks when output buffers fill up.
+   - Uses separate reader threads or non-blocking I/O to read from stdout and stderr pipes simultaneously, preventing pipe buffer saturation deadlocks.
 3. **Handle Lifetime Management**:
-   - Wrap `HANDLE` in a move-only `ScopedHandle` struct:
-     ```cpp
-     struct ScopedHandle {
-         HANDLE handle = INVALID_HANDLE_VALUE;
-         ~ScopedHandle() { if (handle != INVALID_HANDLE_VALUE && handle != nullptr) CloseHandle(handle); }
-         ScopedHandle(const ScopedHandle&) = delete;
-         ScopedHandle& operator=(const ScopedHandle&) = delete;
-         ScopedHandle(ScopedHandle&& o) noexcept : handle(o.handle) { o.handle = INVALID_HANDLE_VALUE; }
-         // ...
-     };
-     ```
+   - Process and pipe handles are wrapped in move-only `ScopedHandle` RAII structs closing via `CloseHandle()`.
 4. **Exit Code & Timing**:
    - Waits for process termination with `WaitForSingleObject(pi.hProcess, timeout_ms)`.
    - Queries exit code using `GetExitCodeProcess`.
 
 ---
 
-## 8. Testing Strategy
+## 11. Testing Strategy
 
 Testing is structured into three distinct tiers:
 
 ```mermaid
 graph TD
-    Tier1["Tier 1: In-Memory Unit Tests (Catch2)<br/>- Zero OS calls, zero disk I/O, sub-millisecond execution<br/>- TaskId validation, DependencyGraph cycle detection<br/>- Invariant checking, TaskState FSM transition rules"]
-    Tier2["Tier 2: Scheduler Simulation Tests<br/>- Uses FakeProcessExecutor and InMemoryHistoryRepository<br/>- Sequential execution order, diamond dependency resolution<br/>- Failure propagation: Prerequisite fails -> Dependent Blocked<br/>- Independent branch isolation"]
+    Tier1["Tier 1: In-Memory Unit Tests (Catch2)<br/>- Zero OS calls, zero disk I/O, sub-millisecond execution<br/>- TaskId validation, DependencyGraph cycle detection<br/>- Deterministic ready-queue order [C, A, B]<br/>- TaskState FSM transition rules & FailureCategory"]
+    Tier2["Tier 2: Scheduler Simulation Tests<br/>- Uses FakeProcessExecutor and InMemoryHistoryRepository<br/>- Sequential execution order, diamond dependency resolution<br/>- Failure propagation: LaunchError & NonZeroExit -> Downstream Blocked<br/>- Independent branch isolation"]
     Tier3["Tier 3: Windows Process Integration Tests<br/>- Uses WindowsProcessExecutor against safe Windows commands<br/>- cmd.exe /c exit 0, cmd.exe /c exit 1, ping 127.0.0.1<br/>- Stdout/stderr pipe capture, working directory validation"]
 
     Tier1 --> Tier2 --> Tier3
@@ -254,11 +328,11 @@ graph TD
 
 ---
 
-## 9. Design Trade-Offs and Unresolved Risks
+## 12. Design Trade-Offs and Unresolved Risks
 
 | Area | Decision Made | Trade-Off Accepted | Unresolved Risk / Mitigation |
 | :--- | :--- | :--- | :--- |
-| **Manifest Format** | JSON via `nlohmann/json` | JSON lacks multi-line raw string formatting compared to YAML. | Mitigate by keeping command arguments structured as JSON string arrays rather than monolithic shell strings. |
-| **Scheduler Concurrency** | Strictly sequential for Milestones 1–5 | Independent branches do not run in parallel in the initial MVP. | Sequential execution establishes clear, verifiable correctness baselines before introducing thread synchronization in Milestone 6. |
-| **External Command Side Effects** | No automatic execution resumption | Workflows cannot magically resume interrupted external commands. | Document that external commands must manage their own idempotency if re-run. History is strictly for auditing. |
+| **Execution State Ownership** | Stored and returned by value | Requires value move semantics | Mitigated by clean C++20 move constructors and zero-copy return. |
+| **Scheduling Order** | Manifest declaration index tie-breaking | Requires tracking original manifest order | Mitigated by storing `declaration_index` in `TaskDefinition`. |
+| **Manifest Format** | JSON via `nlohmann/json` | JSON lacks multi-line raw string literals compared to YAML. | Mitigated by structuring command arguments as arrays of strings rather than single shell strings. |
 | **Win32 Pipe Deadlocks** | Async / multi-threaded pipe reader | Requires careful reader thread coordination before `WaitForSingleObject`. | Write focused integration tests capturing >1MB of stdout/stderr to verify no buffer blocking occurs. |
