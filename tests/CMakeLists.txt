@@ -34,6 +34,13 @@ target_link_libraries(taskforge_tests
         Catch2::Catch2WithMain
 )
 
+target_compile_definitions(taskforge_tests
+    PRIVATE
+        TASKFORGE_EXE_PATH="$<TARGET_FILE:taskforge>"
+)
+
+add_dependencies(taskforge_tests taskforge)
+
 include(CTest)
 include(Catch)
 catch_discover_tests(taskforge_tests)

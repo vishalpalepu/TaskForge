@@ -28,24 +28,38 @@ std::vector<std::string> get_windows_utf8_command_line() {
         return {};
     }
 
+    struct LocalFreeGuard {
+        HLOCAL handle{nullptr};
+        ~LocalFreeGuard() {
+            if (handle) {
+                ::LocalFree(handle);
+            }
+        }
+    };
+    LocalFreeGuard guard{argv_w};
+
     std::vector<std::string> args;
     args.reserve(argc > 1 ? static_cast<size_t>(argc - 1) : 0);
 
     // Skip argv[0] (executable path) to pass subcommand and flags to app.run(args)
     for (int i = 1; i < argc; ++i) {
-        int len = ::WideCharToMultiByte(
-            CP_UTF8, 0, argv_w[i], -1, nullptr, 0, nullptr, nullptr);
-        if (len > 1) { // includes null terminator
-            std::string arg(static_cast<size_t>(len - 1), '\0');
-            ::WideCharToMultiByte(
-                CP_UTF8, 0, argv_w[i], -1, arg.data(), len, nullptr, nullptr);
-            args.push_back(std::move(arg));
+        int wlen = static_cast<int>(::wcslen(argv_w[i]));
+        if (wlen > 0) {
+            int len = ::WideCharToMultiByte(
+                CP_UTF8, 0, argv_w[i], wlen, nullptr, 0, nullptr, nullptr);
+            if (len > 0) {
+                std::string arg(static_cast<size_t>(len), '\0');
+                ::WideCharToMultiByte(
+                    CP_UTF8, 0, argv_w[i], wlen, arg.data(), len, nullptr, nullptr);
+                args.push_back(std::move(arg));
+            } else {
+                args.push_back("");
+            }
         } else {
             args.push_back("");
         }
     }
 
-    ::LocalFree(argv_w);
     return args;
 }
 

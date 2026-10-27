@@ -6,6 +6,16 @@
 #include <fstream>
 #include <sstream>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace taskforge::cli;
 
 namespace {
@@ -132,5 +142,93 @@ TEST_CASE("CliApp: Command-line dispatching and exit codes", "[cli]") {
 
         std::filesystem::remove(manifest_file, ec);
         std::filesystem::remove(unicode_dir, ec);
+    }
+
+    SECTION("End-to-end process launch: taskforge.exe validate with Unicode manifest path") {
+#if defined(_WIN32) && defined(TASKFORGE_EXE_PATH)
+        auto temp_root = std::filesystem::temp_directory_path();
+        auto unicode_dir = temp_root / taskforge::manifest::utf8_to_path("taskforge_cli_e2e_тест_äöü");
+        std::error_code ec;
+        std::filesystem::create_directories(unicode_dir, ec);
+        REQUIRE_FALSE(ec);
+
+        auto manifest_file = unicode_dir / taskforge::manifest::utf8_to_path("манифест_e2e.json");
+        std::string json = R"({
+            "name": "unicode_e2e_cli_wf",
+            "tasks": [
+                { "id": "t1", "executable": "echo.exe" }
+            ]
+        })";
+
+        {
+            std::ofstream file(manifest_file, std::ios::binary);
+            REQUIRE(file.is_open());
+            file << json;
+        }
+
+        std::filesystem::path exe_path = taskforge::manifest::utf8_to_path(TASKFORGE_EXE_PATH);
+        REQUIRE(std::filesystem::exists(exe_path));
+
+        // Construct wide command line: "exe_path" validate "manifest_file"
+        std::wstring cmd = L"\"" + exe_path.wstring() + L"\" validate \"" + manifest_file.wstring() + L"\"";
+        std::vector<wchar_t> cmd_buf(cmd.begin(), cmd.end());
+        cmd_buf.push_back(L'\0');
+
+        HANDLE stdout_read = NULL;
+        HANDLE stdout_write = NULL;
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+
+        REQUIRE(::CreatePipe(&stdout_read, &stdout_write, &sa, 0));
+        ::SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+
+        STARTUPINFOW si{};
+        si.cb = sizeof(STARTUPINFOW);
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = stdout_write;
+        si.hStdError = stdout_write;
+        si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+
+        PROCESS_INFORMATION pi{};
+        BOOL success = ::CreateProcessW(
+            exe_path.c_str(),
+            cmd_buf.data(),
+            nullptr,
+            nullptr,
+            TRUE,
+            0,
+            nullptr,
+            nullptr,
+            &si,
+            &pi
+        );
+
+        ::CloseHandle(stdout_write); // Close write end in parent so ReadFile terminates
+
+        REQUIRE(success);
+
+        std::string captured_output;
+        char buffer[512];
+        DWORD bytes_read = 0;
+        while (::ReadFile(stdout_read, buffer, sizeof(buffer), &bytes_read, nullptr) && bytes_read > 0) {
+            captured_output.append(buffer, bytes_read);
+        }
+        ::CloseHandle(stdout_read);
+
+        ::WaitForSingleObject(pi.hProcess, 5000);
+        DWORD exit_code = 0;
+        ::GetExitCodeProcess(pi.hProcess, &exit_code);
+
+        ::CloseHandle(pi.hProcess);
+        ::CloseHandle(pi.hThread);
+
+        std::filesystem::remove(manifest_file, ec);
+        std::filesystem::remove(unicode_dir, ec);
+
+        CHECK(exit_code == 0);
+        CHECK(captured_output.find("Workflow 'unicode_e2e_cli_wf' is valid (1 task).") != std::string::npos);
+#endif
     }
 }
