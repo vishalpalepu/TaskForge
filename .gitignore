@@ -1,0 +1,26 @@
+# Build directories
+build/
+bin/
+out/
+_build/
+CMakeUserPresets.json
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+
+# CLion / JetBrains
+.idea/
+cmake-build-*/
+
+# OS-specific
+Thumbs.db
+.DS_Store
+
+# Test / Coverage artifacts
+*.gcda
+*.gcno
+*.gcov
+coverage/
