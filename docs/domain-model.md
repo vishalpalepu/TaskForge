@@ -41,7 +41,7 @@ To prevent duplicate responsibilities and unreachable dead validation code, inva
 1. **Local Task Invariants (`TaskDefinition`)**: Validates non-empty executable, no duplicate dependencies, and no self-dependencies.
 2. **Aggregate Consistency (`WorkflowDefinition`)**: Validates distinct task IDs and establishes deterministic declaration ordering.
 3. **Semantic Workflow Invariants (`WorkflowValidator`)**: Validates non-empty workflows, referential integrity (all prerequisites exist), and absence of dependency cycles.
-4. **Untrusted Manifest Input (Future Milestone 3 `WorkflowParser`)**: When reading external JSON manifests, the parser parses raw manifest structures, accumulates all syntax and field errors into a `ValidationResult`, and constructs valid `TaskDefinition` / `WorkflowDefinition` domain objects only after raw validation succeeds. This ensures users receive comprehensive error summaries rather than premature exceptions.
+4. **Untrusted Manifest Input (`WorkflowManifestParser`, Stage 3A)**: When reading external JSON manifests, the parser parses raw manifest structures into intermediate DTOs, accumulates all syntax, schema, and field errors into a `ValidationResult`, and constructs valid `TaskDefinition` / `WorkflowDefinition` domain objects only after raw and local validation succeed. This ensures users receive comprehensive error summaries without ever violating domain constructors or throwing premature exceptions.
 
 ---
 

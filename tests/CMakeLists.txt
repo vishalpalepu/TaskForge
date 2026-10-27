@@ -16,6 +16,8 @@ add_executable(taskforge_tests
     test_task_state.cpp
     test_workflow_execution.cpp
     test_workflow_scheduler.cpp
+    test_manifest_parser.cpp
+    test_cli_app.cpp
 )
 
 target_include_directories(taskforge_tests
@@ -27,6 +29,8 @@ target_link_libraries(taskforge_tests
     PRIVATE
         taskforge_core
         taskforge_scheduler
+        taskforge_manifest
+        taskforge_cli
         Catch2::Catch2WithMain
 )
 

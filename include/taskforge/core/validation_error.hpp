@@ -15,7 +15,12 @@ enum class ValidationErrorCode {
     SelfDependency,
     CircularDependency,
     EmptyExecutable,
-    InvalidTaskId
+    InvalidTaskId,
+    JsonSyntaxError,
+    InvalidSchema,
+    DuplicateDependency,
+    UnknownField,
+    UnsupportedVersion
 };
 
 /**

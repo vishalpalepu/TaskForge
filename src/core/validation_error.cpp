@@ -29,6 +29,21 @@ std::string ValidationError::to_string() const {
         case ValidationErrorCode::InvalidTaskId:
             oss << "[INVALID_TASK_ID] ";
             break;
+        case ValidationErrorCode::JsonSyntaxError:
+            oss << "[JSON_SYNTAX_ERROR] ";
+            break;
+        case ValidationErrorCode::InvalidSchema:
+            oss << "[INVALID_SCHEMA] ";
+            break;
+        case ValidationErrorCode::DuplicateDependency:
+            oss << "[DUPLICATE_DEPENDENCY] ";
+            break;
+        case ValidationErrorCode::UnknownField:
+            oss << "[UNKNOWN_FIELD] ";
+            break;
+        case ValidationErrorCode::UnsupportedVersion:
+            oss << "[UNSUPPORTED_VERSION] ";
+            break;
     }
 
     if (task_id) {

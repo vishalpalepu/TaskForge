@@ -48,6 +48,59 @@ target_link_libraries(taskforge_scheduler
         taskforge_core
 )
 
+# Third-party Dependencies
+include(FetchContent)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
+# Manifest Parsing Library
+add_library(taskforge_manifest
+    src/manifest/manifest_parser.cpp
+)
+
+target_include_directories(taskforge_manifest
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(taskforge_manifest
+    PUBLIC
+        taskforge_core
+    PRIVATE
+        nlohmann_json::nlohmann_json
+)
+
+# CLI Application Library
+add_library(taskforge_cli
+    src/cli/cli_app.cpp
+)
+
+target_include_directories(taskforge_cli
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+)
+
+target_link_libraries(taskforge_cli
+    PUBLIC
+        taskforge_manifest
+)
+
+# CLI Main Executable
+add_executable(taskforge
+    src/cli/main.cpp
+)
+
+target_link_libraries(taskforge
+    PRIVATE
+        taskforge_cli
+)
+
 # Testing configuration
 enable_testing()
 add_subdirectory(tests)
