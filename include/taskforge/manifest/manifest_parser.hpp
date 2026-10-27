@@ -15,6 +15,7 @@ namespace taskforge::manifest {
  * @brief Utility for explicit UTF-8 string to native filesystem path conversion.
  *
  * Guarantees correct Unicode path handling on Windows without encoding corruption.
+ * @throws std::invalid_argument if utf8_str contains an invalid UTF-8 byte sequence.
  */
 [[nodiscard]] std::filesystem::path utf8_to_path(std::string_view utf8_str);
 

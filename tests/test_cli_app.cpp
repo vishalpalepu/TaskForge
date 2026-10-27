@@ -1,4 +1,5 @@
 #include "taskforge/cli/cli_app.hpp"
+#include "taskforge/manifest/manifest_parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -99,5 +100,37 @@ TEST_CASE("CliApp: Command-line dispatching and exit codes", "[cli]") {
         CHECK(code == static_cast<int>(ExitCode::ValidationFailed));
         CHECK(out.str().empty());
         CHECK(err.str().find("CIRCULAR_DEPENDENCY") != std::string::npos);
+    }
+
+    SECTION("validate with non-ASCII directory and filename in path succeeds with exit code 0") {
+        auto temp_root = std::filesystem::temp_directory_path();
+        auto unicode_dir = temp_root / taskforge::manifest::utf8_to_path("taskforge_cli_тест_äöü");
+        std::error_code ec;
+        std::filesystem::create_directories(unicode_dir, ec);
+        REQUIRE_FALSE(ec);
+
+        auto manifest_file = unicode_dir / taskforge::manifest::utf8_to_path("манифест.json");
+        std::string json = R"({
+            "name": "unicode_cli_wf",
+            "tasks": [
+                { "id": "t1", "executable": "echo.exe" }
+            ]
+        })";
+
+        {
+            std::ofstream file(manifest_file, std::ios::binary);
+            REQUIRE(file.is_open());
+            file << json;
+        }
+
+        std::string utf8_path_str = taskforge::manifest::path_to_utf8(manifest_file);
+        int code = app.run({"validate", utf8_path_str});
+
+        CHECK(code == static_cast<int>(ExitCode::Success));
+        CHECK(out.str().find("Workflow 'unicode_cli_wf' is valid (1 task).") != std::string::npos);
+        CHECK(err.str().empty());
+
+        std::filesystem::remove(manifest_file, ec);
+        std::filesystem::remove(unicode_dir, ec);
     }
 }

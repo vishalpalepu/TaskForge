@@ -101,6 +101,18 @@ target_link_libraries(taskforge
         taskforge_cli
 )
 
+if(WIN32)
+    target_link_libraries(taskforge_manifest
+        PRIVATE
+            kernel32
+    )
+    target_link_libraries(taskforge
+        PRIVATE
+            shell32
+            kernel32
+    )
+endif()
+
 # Testing configuration
 enable_testing()
 add_subdirectory(tests)

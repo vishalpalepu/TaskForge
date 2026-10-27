@@ -1,6 +1,7 @@
 #include "taskforge/manifest/manifest_parser.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <fstream>
 
 using namespace taskforge::core;
 using namespace taskforge::manifest;
@@ -302,6 +303,39 @@ TEST_CASE("WorkflowManifestParser: Local task constraints and semantic rules", "
 }
 
 TEST_CASE("WorkflowManifestParser: Unicode and UTF-8 path handling", "[manifest]") {
+    SECTION("Round-trip conversion for non-ASCII paths") {
+        std::vector<std::string> test_paths = {
+            "C:/Проекты/build/тест.exe",
+            "C:/München/Grüße/äöüß.exe",
+            "C:/プロジェクト/日本語/テスト.json",
+            "C:/Files/With Spaces/äöü/test.exe"
+        };
+
+        for (const auto& expected : test_paths) {
+            std::filesystem::path p = utf8_to_path(expected);
+            std::string round_trip = path_to_utf8(p);
+            CHECK(round_trip == expected);
+        }
+    }
+
+    SECTION("Explicit error contract: invalid UTF-8 input throws std::invalid_argument") {
+        // Invalid continuation byte without lead byte
+        CHECK_THROWS_AS(utf8_to_path("\x80"), std::invalid_argument);
+        // Invalid lead byte
+        CHECK_THROWS_AS(utf8_to_path("\xFF\xFE"), std::invalid_argument);
+        // Truncated 2-byte sequence
+        CHECK_THROWS_AS(utf8_to_path("\xC2"), std::invalid_argument);
+        // Invalid middle byte in 3-byte sequence
+        CHECK_THROWS_AS(utf8_to_path("\xE2\x28\xA1"), std::invalid_argument);
+
+        try {
+            (void)utf8_to_path("\xFF");
+            FAIL("Expected std::invalid_argument was not thrown");
+        } catch (const std::invalid_argument& e) {
+            CHECK(std::string(e.what()).find("Invalid UTF-8") != std::string::npos);
+        }
+    }
+
     SECTION("Unicode characters in executable and working directory paths are preserved") {
         std::string utf8_exec = "C:/Проекты/build/тест.exe";
         std::string utf8_wd = "C:/München/Arbeit/日本語";
@@ -326,6 +360,38 @@ TEST_CASE("WorkflowManifestParser: Unicode and UTF-8 path handling", "[manifest]
         CHECK(path_to_utf8(task->executable()) == utf8_exec);
         REQUIRE(task->working_directory().has_value());
         CHECK(path_to_utf8(*task->working_directory()) == utf8_wd);
+    }
+
+    SECTION("Real filesystem operations in non-ASCII directory and manifest filename") {
+        auto temp_root = std::filesystem::temp_directory_path();
+        auto unicode_dir = temp_root / utf8_to_path("taskforge_тест_äöü_日本語");
+        std::error_code ec;
+        std::filesystem::create_directories(unicode_dir, ec);
+        REQUIRE_FALSE(ec);
+
+        auto manifest_file = unicode_dir / utf8_to_path("манифест_テスト.json");
+        std::string json = R"({
+            "name": "unicode_file_wf",
+            "tasks": [
+                { "id": "t1", "executable": "cmake.exe" }
+            ]
+        })";
+
+        {
+            std::ofstream out(manifest_file, std::ios::binary);
+            REQUIRE(out.is_open());
+            out << json;
+        }
+
+        // Test real parse_file on the non-ASCII path
+        auto result_opt = WorkflowManifestParser::parse_file(manifest_file);
+        REQUIRE(result_opt.has_value());
+        REQUIRE(result_opt->is_valid());
+        CHECK(result_opt->workflow().name() == "unicode_file_wf");
+
+        // Clean up
+        std::filesystem::remove(manifest_file, ec);
+        std::filesystem::remove(unicode_dir, ec);
     }
 }
 

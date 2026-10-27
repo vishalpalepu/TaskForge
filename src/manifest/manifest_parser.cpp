@@ -3,6 +3,16 @@
 
 #include <nlohmann/json.hpp>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -15,17 +25,83 @@ namespace taskforge::manifest {
 // ---------------------------------------------------------------------------
 
 std::filesystem::path utf8_to_path(std::string_view utf8_str) {
+    if (utf8_str.empty()) {
+        return std::filesystem::path{};
+    }
+
 #if defined(_WIN32)
-    return std::filesystem::path(
-        std::u8string_view(reinterpret_cast<const char8_t*>(utf8_str.data()), utf8_str.size()));
+    // MultiByteToWideChar with MB_ERR_INVALID_CHARS verifies that utf8_str contains valid UTF-8.
+    int len = ::MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        utf8_str.data(),
+        static_cast<int>(utf8_str.size()),
+        nullptr,
+        0);
+
+    if (len <= 0) {
+        throw std::invalid_argument(
+            "Invalid UTF-8 byte sequence in filesystem path.");
+    }
+
+    std::wstring wstr(static_cast<size_t>(len), L'\0');
+    ::MultiByteToWideChar(
+        CP_UTF8,
+        MB_ERR_INVALID_CHARS,
+        utf8_str.data(),
+        static_cast<int>(utf8_str.size()),
+        wstr.data(),
+        len);
+
+    return std::filesystem::path(std::move(wstr));
 #else
-    return std::filesystem::path(utf8_str);
+    // For non-Windows POSIX systems, safely copy code units into std::u8string without pointer aliasing:
+    std::u8string u8;
+    u8.reserve(utf8_str.size());
+    for (char c : utf8_str) {
+        u8.push_back(static_cast<char8_t>(static_cast<unsigned char>(c)));
+    }
+    return std::filesystem::path(std::move(u8));
 #endif
 }
 
 std::string path_to_utf8(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    const std::wstring& wstr = path.native();
+    if (wstr.empty()) {
+        return {};
+    }
+
+    int len = ::WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        wstr.data(),
+        static_cast<int>(wstr.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+
+    if (len <= 0) {
+        throw std::runtime_error("Failed to convert native path to UTF-8.");
+    }
+
+    std::string result(static_cast<size_t>(len), '\0');
+    ::WideCharToMultiByte(
+        CP_UTF8,
+        0,
+        wstr.data(),
+        static_cast<int>(wstr.size()),
+        result.data(),
+        len,
+        nullptr,
+        nullptr);
+
+    return result;
+#else
     auto u8 = path.u8string();
-    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+    return std::string(u8.begin(), u8.end());
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -411,14 +487,25 @@ ManifestParseResult WorkflowManifestParser::parse_string(std::string_view json_c
         }
 
         std::optional<std::filesystem::path> wd = std::nullopt;
-        if (raw.working_directory) {
-            wd = utf8_to_path(*raw.working_directory);
+        std::filesystem::path exec_path;
+        try {
+            if (raw.working_directory) {
+                wd = utf8_to_path(*raw.working_directory);
+            }
+            exec_path = utf8_to_path(raw.executable);
+        } catch (const std::invalid_argument& e) {
+            diagnostics.add_error(core::ValidationError{
+                core::ValidationErrorCode::InvalidSchema,
+                e.what(),
+                std::make_optional(core::TaskId(raw.id)),
+                {}});
+            return ManifestParseResult::failure(std::move(diagnostics));
         }
 
         tasks.push_back(core::TaskDefinition::create(
             core::TaskId(raw.id),
             std::move(raw.description),
-            utf8_to_path(raw.executable),
+            std::move(exec_path),
             std::move(raw.arguments),
             std::move(wd),
             std::move(deps)));
