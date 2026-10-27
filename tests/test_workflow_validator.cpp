@@ -48,15 +48,22 @@ TEST_CASE("WorkflowValidator rule enforcement", "[domain][validator]") {
         CHECK(result.errors()[0].task_id == TaskId("test"));
     }
 
-    SECTION("Duplicate task IDs detected via validate_raw_tasks") {
-        std::vector<TaskDefinition> tasks;
-        tasks.push_back(TaskDefinition::create(TaskId("duplicate"), "first", "tool1.exe"));
-        tasks.push_back(TaskDefinition::create(TaskId("duplicate"), "second", "tool2.exe"));
+    SECTION("ValidationError formatting including cycle path") {
+        ValidationError simple_err{
+            .code = ValidationErrorCode::MissingDependency,
+            .message = "Prerequisite 'build' not found.",
+            .task_id = TaskId("test"),
+            .cycle_path = {}
+        };
+        CHECK(simple_err.to_string() == "[MISSING_DEPENDENCY] Task 'test': Prerequisite 'build' not found.");
 
-        auto result = WorkflowValidator::validate_raw_tasks("dup-check", tasks);
-
-        CHECK_FALSE(result.is_valid());
-        CHECK(result.has_error_code(ValidationErrorCode::DuplicateTaskId));
+        ValidationError cycle_err{
+            .code = ValidationErrorCode::CircularDependency,
+            .message = "Circular dependency chain detected.",
+            .task_id = TaskId("task-a"),
+            .cycle_path = {TaskId("task-a"), TaskId("task-b"), TaskId("task-a")}
+        };
+        CHECK(cycle_err.to_string() == "[CIRCULAR_DEPENDENCY] Task 'task-a': Circular dependency chain detected. (Cycle: task-a -> task-b -> task-a)");
     }
 
     SECTION("Circular dependency is detected and reported with cycle path") {
@@ -69,17 +76,16 @@ TEST_CASE("WorkflowValidator rule enforcement", "[domain][validator]") {
 
         CHECK_FALSE(result.is_valid());
         CHECK(result.has_error_code(ValidationErrorCode::CircularDependency));
-        REQUIRE_FALSE(result.errors().empty());
+        REQUIRE(result.errors().size() == 1);
 
-        // Check cycle path is populated
-        bool found_cycle_path = false;
-        for (const auto& err : result.errors()) {
-            if (err.code == ValidationErrorCode::CircularDependency && !err.cycle_path.empty()) {
-                found_cycle_path = true;
-                CHECK(err.cycle_path.front() == err.cycle_path.back());
-            }
-        }
-        CHECK(found_cycle_path);
+        const auto& err = result.errors().front();
+        CHECK(err.code == ValidationErrorCode::CircularDependency);
+        CHECK(err.task_id == TaskId("task-a"));
+
+        const std::vector<TaskId> expected_cycle = {
+            TaskId("task-a"), TaskId("task-b"), TaskId("task-a")
+        };
+        CHECK(err.cycle_path == expected_cycle);
     }
 
     SECTION("Deterministic manifest declaration ordering (ADR 0002)") {

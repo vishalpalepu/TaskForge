@@ -17,6 +17,11 @@ namespace taskforge::core {
  * - Prerequisite edge: B depends on A (A must precede B).
  * - Forward edge (Adjacency): A -> B (A's completion unlocks B).
  * - Backward edge (Prerequisites): B -> A (B requires A to complete).
+ *
+ * Algorithmic Complexity:
+ * - On valid DAGs (absence of cycles): O(|V| + |E|) time and O(|V| + |E|) space.
+ * - When cycles are present: O(|V| + |E| + B * |V|) time, where B is the number of detected
+ *   back-edges and each cycle witness reconstruction copies O(|V|) elements from the call stack.
  */
 class DependencyGraph {
 public:

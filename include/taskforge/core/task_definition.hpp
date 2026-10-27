@@ -10,18 +10,22 @@
 namespace taskforge::core {
 
 /**
- * @brief Immutable value object describing a single unit of execution.
+ * @brief Encapsulated value type describing a single unit of execution.
  *
  * Adheres to ADR 0001:
- * - Uses value semantics with private non-const members to enable efficient moves and vector reallocation.
- * - Enforces invariants upon construction.
+ * - Uses regular value semantics with private non-const members to enable efficient moves and vector reallocation.
+ * - Enforces construction-time invariants (non-empty executable, no duplicate prerequisites, no self-dependency).
  * - Exposes only const accessors to external callers.
  * - Stores declaration_index for deterministic scheduling (ADR 0002).
+ *
+ * Moved-From Contract:
+ * - A moved-from TaskDefinition is in a valid but unspecified state. It must not be assumed
+ *   to satisfy domain invariants and should only be reassigned or destroyed.
  */
 class TaskDefinition {
 public:
     /// @brief Factory function that validates invariants and constructs a TaskDefinition.
-    /// @throws std::invalid_argument if executable is empty or self-dependency detected.
+    /// @throws std::invalid_argument if executable is empty, or duplicate/self-dependency detected.
     [[nodiscard]] static TaskDefinition create(
         TaskId id,
         std::string description,
@@ -52,10 +56,11 @@ public:
     /// @brief Checks if this task depends directly on prerequisite_id.
     [[nodiscard]] bool depends_on(const TaskId& prerequisite_id) const noexcept;
 
+private:
+    friend class WorkflowDefinition;
+
     /// @brief Internal helper used by WorkflowDefinition to establish declaration ordering.
     void set_declaration_index(size_t index) noexcept { declaration_index_ = index; }
-
-private:
     TaskDefinition(
         TaskId id,
         std::string description,

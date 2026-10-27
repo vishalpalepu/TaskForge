@@ -74,4 +74,14 @@ TEST_CASE("TaskId validation and construction", "[domain][task_id]") {
         oss << id;
         CHECK(oss.str() == "format-check");
     }
+
+    SECTION("Moved-from contract: safe reassignment and destruction") {
+        TaskId a("task-a");
+        TaskId b = std::move(a);
+        CHECK(b.value() == "task-a");
+
+        // Reassigning moved-from object is safe
+        a = TaskId("task-reassigned");
+        CHECK(a.value() == "task-reassigned");
+    }
 }

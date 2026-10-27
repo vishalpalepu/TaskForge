@@ -31,9 +31,17 @@ To ensure high architectural integrity, the domain strictly enforces seven core 
 - A saved history record answers *"What happened in run X?"* (read-only audit).
 - Resuming or re-executing a workflow cannot assume that past tasks left the environment in a clean state. External commands are not assumed to be idempotent.
 
-### G. Immutability via Interface vs. The `const` Member Anti-Pattern
-- To guarantee immutability, classes expose **read-only const accessors** and private non-const member variables.
-- Making member variables `const` inside a class deletes default move-assignment operators, prevents `std::swap`, and breaks vector reallocation. True value semantics are preserved by keeping members non-const, validating invariants during construction, and omitting mutator methods.
+### G. Encapsulated Value Types with Const Query APIs vs. The `const` Member Anti-Pattern
+- To guarantee domain integrity without sacrificing performance, classes expose **read-only const accessors** and private non-const member variables.
+- Making member variables `const` inside a class deletes default move-assignment operators, prevents `std::swap`, and breaks vector reallocation.
+- True value semantics are preserved by keeping members non-const, validating invariants during construction, and omitting public mutator methods. Reassignment and destruction of moved-from objects remain safe.
+
+### H. Division of Invariant Responsibilities & Untrusted Input Handling
+To prevent duplicate responsibilities and unreachable dead validation code, invariants are partitioned strictly by architectural layer:
+1. **Local Task Invariants (`TaskDefinition`)**: Validates non-empty executable, no duplicate dependencies, and no self-dependencies.
+2. **Aggregate Consistency (`WorkflowDefinition`)**: Validates distinct task IDs and establishes deterministic declaration ordering.
+3. **Semantic Workflow Invariants (`WorkflowValidator`)**: Validates non-empty workflows, referential integrity (all prerequisites exist), and absence of dependency cycles.
+4. **Untrusted Manifest Input (Future Milestone 3 `WorkflowParser`)**: When reading external JSON manifests, the parser parses raw manifest structures, accumulates all syntax and field errors into a `ValidationResult`, and constructs valid `TaskDefinition` / `WorkflowDefinition` domain objects only after raw validation succeeds. This ensures users receive comprehensive error summaries rather than premature exceptions.
 
 ---
 

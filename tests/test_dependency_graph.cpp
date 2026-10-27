@@ -72,15 +72,29 @@ TEST_CASE("DependencyGraph analysis and cycle detection", "[domain][graph]") {
         DependencyGraph graph(workflow);
 
         REQUIRE(graph.has_cycles());
-        REQUIRE_FALSE(graph.detected_cycles().empty());
+        REQUIRE(graph.detected_cycles().size() == 1);
 
         const auto& cycle = graph.detected_cycles().front();
-        // Cycle should be closed: starts and ends with the same node
-        REQUIRE(cycle.size() >= 3);
+        // Cycle must begin and end at the same task
+        REQUIRE(cycle.size() == 3);
         CHECK(cycle.front() == cycle.back());
+
+        // Exact deterministic sequence matching declaration traversal
+        const std::vector<TaskId> expected_cycle = {
+            TaskId("node-a"), TaskId("node-b"), TaskId("node-a")
+        };
+        CHECK(cycle == expected_cycle);
+
+        // Verify each consecutive pair corresponds to a genuine dependency edge
+        for (size_t i = 0; i + 1 < cycle.size(); ++i) {
+            const auto& current = cycle[i];
+            const auto& next = cycle[i + 1];
+            const auto& prereqs = graph.prerequisites_of(current);
+            CHECK(std::ranges::find(prereqs, next) != prereqs.end());
+        }
     }
 
-    SECTION("Indirect 3-node cycle: A -> B -> C -> A") {
+    SECTION("Indirect 3-node cycle: A -> C -> B -> A") {
         std::vector<TaskDefinition> tasks;
         tasks.push_back(TaskDefinition::create(TaskId("node-a"), "A", "tool.exe", {}, std::nullopt, {TaskId("node-c")}));
         tasks.push_back(TaskDefinition::create(TaskId("node-b"), "B", "tool.exe", {}, std::nullopt, {TaskId("node-a")}));
@@ -93,8 +107,22 @@ TEST_CASE("DependencyGraph analysis and cycle detection", "[domain][graph]") {
         REQUIRE_FALSE(graph.detected_cycles().empty());
 
         const auto& cycle = graph.detected_cycles().front();
-        REQUIRE(cycle.size() >= 4);
+        REQUIRE(cycle.size() == 4);
         CHECK(cycle.front() == cycle.back());
+
+        // Exact deterministic sequence: A requires C, C requires B, B requires A
+        const std::vector<TaskId> expected_cycle = {
+            TaskId("node-a"), TaskId("node-c"), TaskId("node-b"), TaskId("node-a")
+        };
+        CHECK(cycle == expected_cycle);
+
+        // Verify each consecutive pair is a genuine dependency edge
+        for (size_t i = 0; i + 1 < cycle.size(); ++i) {
+            const auto& current = cycle[i];
+            const auto& next = cycle[i + 1];
+            const auto& prereqs = graph.prerequisites_of(current);
+            CHECK(std::ranges::find(prereqs, next) != prereqs.end());
+        }
     }
 
     SECTION("Multi-component graph with an isolated cycle") {
@@ -110,5 +138,12 @@ TEST_CASE("DependencyGraph analysis and cycle detection", "[domain][graph]") {
         DependencyGraph graph(workflow);
 
         REQUIRE(graph.has_cycles());
+        REQUIRE(graph.detected_cycles().size() == 1);
+
+        const auto& cycle = graph.detected_cycles().front();
+        const std::vector<TaskId> expected_cycle = {
+            TaskId("cycle-c"), TaskId("cycle-d"), TaskId("cycle-c")
+        };
+        CHECK(cycle == expected_cycle);
     }
 }

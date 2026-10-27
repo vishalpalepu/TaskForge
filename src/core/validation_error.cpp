@@ -38,9 +38,6 @@ std::string ValidationError::to_string() const {
 
     if (!cycle_path.empty()) {
         oss << " (Cycle: ";
-        for (size_t i = 0; i < cycle_path.empty(); ++i) {
-            // empty check handled, iterate safely
-        }
         for (size_t i = 0; i < cycle_path.size(); ++i) {
             oss << cycle_path[i].value();
             if (i + 1 < cycle_path.size()) {

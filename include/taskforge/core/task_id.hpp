@@ -14,7 +14,11 @@ namespace taskforge::core {
  * Invariant: Non-empty, consisting only of alphanumeric characters, hyphens, underscores, or dots.
  * [a-zA-Z0-9_\-\.]+
  *
- * Implements value semantics with zero heap allocation beyond the internal string storage.
+ * Implements regular value semantics with zero heap allocation beyond internal string storage.
+ *
+ * Moved-From Contract:
+ * - A moved-from TaskId is in a valid but unspecified state (typically holding an empty string).
+ * - It must not be assumed to satisfy is_valid() and should only be reassigned or destroyed.
  */
 class TaskId {
 public:

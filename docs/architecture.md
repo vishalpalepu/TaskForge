@@ -223,6 +223,9 @@ Declaring member variables `const` inside a class (e.g. `const TaskId id_;`) is 
    ```cpp
    class TaskDefinition {
    private:
+       friend class WorkflowDefinition;
+       void set_declaration_index(size_t index) noexcept { declaration_index_ = index; }
+
        TaskId id_;
        std::string description_;
        std::filesystem::path executable_;
@@ -235,10 +238,11 @@ Declaring member variables `const` inside a class (e.g. `const TaskId id_;`) is 
 2. **Construction-Time Invariant Enforcement**:
    - Private constructor accessible only via static factory functions (`TaskDefinition::create(...)`).
    - Rejects empty IDs, empty executables, invalid characters, and self-dependencies before the object is created.
-3. **Const-Only Observers**:
-   - Read-only accessors (`const TaskId& id() const noexcept`).
-   - No setters or mutators.
-   - Once constructed, `TaskDefinition` and `WorkflowDefinition` are externally immutable while remaining fully copyable, movable, and assignable.
+3. **Const-Only Observers & Encapsulated Coordination**:
+   - Read-only public accessors (`const TaskId& id() const noexcept`).
+   - No public setters or mutators. Declaration index coordination is restricted strictly to `friend class WorkflowDefinition`.
+   - Once constructed, `TaskDefinition` and `WorkflowDefinition` protect their domain properties from external mutation while remaining fully copyable, movable, and assignable.
+   - Vector reallocation across $n$ elements requires $\mathcal{O}(n)$ element moves, where each element move performs an efficient $O(1)$ pointer transfer without heap reallocation. Moved-from objects enter a valid but unspecified state.
 
 ---
 
@@ -273,8 +277,11 @@ A deep forensic inspection of the host Windows environment was performed:
 - Windows Kits contains only an empty catalog; the Windows SDK developer headers and libraries are absent.
 - Visual Studio IDE and Visual Studio Build Tools are **genuinely not installed** on this machine (only VC++ runtime redistributables and VS Code exist).
 
-### 9.2 Required Windows Setup (To be performed by user)
-To build and test TaskForge natively using MSVC and CMake, run the following commands in an elevated PowerShell:
+### 9.2 Toolchain Configuration & Verified Compiler
+- **Verified Environment**: CMake 4.4.4 + MinGW Makefiles + GCC 16.2.0 (MSYS2 UCRT64).
+- **Toolchain Deviation Note**: While MSVC (`cl.exe`) remains an intended future Windows target, Milestone 1 was compiled, tested, and verified under native Windows UCRT64 GCC 16.2.0 with `-std=c++20`. MSVC compatibility is not claimed until an explicit build under `cl.exe` succeeds.
+
+To optionally install MSVC Build Tools via `winget` in an elevated PowerShell:
 
 ```powershell
 # 1. Install CMake

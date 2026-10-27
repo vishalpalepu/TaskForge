@@ -82,5 +82,9 @@ TEST_CASE("TaskDefinition construction and invariants", "[domain][task_definitio
         // Move assignment
         assigned = std::move(moved);
         CHECK(assigned.id() == TaskId("original"));
+
+        // Moved-from object can be safely reassigned
+        moved = TaskDefinition::create(TaskId("new-task"), "new desc", "tool.exe");
+        CHECK(moved.id() == TaskId("new-task"));
     }
 }
