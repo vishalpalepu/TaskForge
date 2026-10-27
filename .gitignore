@@ -3,6 +3,11 @@ build/
 bin/
 out/
 _build/
+x64/
+x86/
+[Dd]ebug/
+[Rr]elease/
+*.dir/
 CMakeUserPresets.json
 
 # Visual Studio / VS Code
@@ -10,6 +15,7 @@ CMakeUserPresets.json
 .vscode/
 *.user
 *.suo
+CMakeSettings.json
 
 # CLion / JetBrains
 .idea/
