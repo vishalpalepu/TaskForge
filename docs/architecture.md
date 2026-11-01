@@ -31,6 +31,7 @@ The architecture enforces seven essential distinctions:
 TaskForge follows a clean, layered architecture with strict dependency rules pointing inwards:
 
 ```mermaid
+
 graph TD
     subgraph Presentation_Layer["Presentation Layer (CLI)"]
         CLI["CLI Command Parser<br/>(validate, run, history)"]
@@ -45,14 +46,14 @@ graph TD
 
     subgraph Orchestration_Layer["Orchestration Layer"]
         Engine["WorkflowScheduler"]
-        IExec["<<interface>><br/>IProcessExecutor"]
-        IHistory["<<interface>><br/>IHistoryRepository"]
+        IExec["&lt;&lt;interface&gt;&gt;<br/>IProcessExecutor"]
+        IHistory["&lt;&lt;interface&gt;&gt;<br/>IHistoryRepository"]
     end
 
     subgraph Domain_Layer["Domain Layer (Core - Zero Dependencies)"]
         Domain["TaskId<br/>TaskDefinition<br/>WorkflowDefinition<br/>TaskState<br/>TaskResult<br/>WorkflowExecution"]
-        Graph["DependencyGraph<br/>(Acyclicity & Topological Readiness)"]
-        Validator["WorkflowValidator<br/>(Invariants & Diagnostic Rules)"]
+        Graph["DependencyGraph<br/>(Acyclicity &amp; Topological Readiness)"]
+        Validator["WorkflowValidator<br/>(Invariants &amp; Diagnostic Rules)"]
     end
 
     CLI --> Engine
@@ -65,11 +66,13 @@ graph TD
     Engine --> Domain
     Engine --> Graph
 
-    SysExec ..|> IExec
-    HistoryRepo ..|> IHistory
+    SysExec -.->|implements| IExec
+    HistoryRepo -.->|implements| IHistory
+
     Parser --> Domain
     Validator --> Domain
     Validator --> Graph
+
 ```
 
 ---
