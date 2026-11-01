@@ -10,10 +10,11 @@ namespace taskforge::cli {
  * @brief Standardized exit codes returned by TaskForge CLI commands.
  */
 enum class ExitCode : int {
-    Success = 0,          ///< Command succeeded (e.g. manifest is valid).
+    Success = 0,          ///< Command succeeded (e.g. manifest is valid, all tasks succeeded).
     InvalidUsage = 1,     ///< Missing/invalid flags or unrecognized command.
     FileNotFound = 2,     ///< Manifest file does not exist or cannot be read.
-    ValidationFailed = 3  ///< Manifest failed syntax, schema, or semantic validation.
+    ValidationFailed = 3, ///< Manifest failed syntax, schema, or semantic validation.
+    ExecutionFailed = 4   ///< Workflow executed but at least one task failed or was blocked.
 };
 
 /**
@@ -37,6 +38,7 @@ public:
 
 private:
     int handle_validate(const std::vector<std::string>& sub_args);
+    int handle_run(const std::vector<std::string>& sub_args);
     void print_usage();
 
     std::ostream& out_;

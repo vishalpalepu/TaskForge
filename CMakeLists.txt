@@ -89,7 +89,35 @@ target_include_directories(taskforge_cli
 target_link_libraries(taskforge_cli
     PUBLIC
         taskforge_manifest
+        taskforge_scheduler
 )
+
+# Platform Layer (Windows-specific process execution)
+if(WIN32)
+    add_library(taskforge_platform
+        src/platform/win32/windows_process_executor.cpp
+    )
+
+    target_include_directories(taskforge_platform
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+    )
+
+    target_link_libraries(taskforge_platform
+        PUBLIC
+            taskforge_scheduler
+            taskforge_manifest
+        PRIVATE
+            kernel32
+            shell32
+    )
+
+    target_link_libraries(taskforge_cli
+        PUBLIC
+            taskforge_platform
+    )
+endif()
 
 # CLI Main Executable
 add_executable(taskforge

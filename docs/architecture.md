@@ -303,19 +303,26 @@ After installation, developer tools are accessed via:
 
 The `WindowsProcessExecutor` implements `IProcessExecutor` directly using Win32 APIs:
 
-1. **Direct Process Spawning**:
-   - Calls `CreateProcessW` directly (bypassing `cmd.exe` and `powershell.exe`).
-   - Constructs argument strings with proper Win32 escaping rules (`CommandLineToArgvW` compatibility).
-   - Sets `bInheritHandles = TRUE` only for designated pipe handles.
-2. **Standard Output and Error Capture**:
-   - Creates two anonymous pipes via `CreatePipe`: one for stdout, one for stderr.
-   - Ensures the write end is inheritable, while the read end is non-inheritable (`SetHandleInformation`).
-   - Uses separate reader threads or non-blocking I/O to read from stdout and stderr pipes simultaneously, preventing pipe buffer saturation deadlocks.
-3. **Handle Lifetime Management**:
-   - Process and pipe handles are wrapped in move-only `ScopedHandle` RAII structs closing via `CloseHandle()`.
-4. **Exit Code & Timing**:
-   - Waits for process termination with `WaitForSingleObject(pi.hProcess, timeout_ms)`.
-   - Queries exit code using `GetExitCodeProcess`.
+1. **Direct Process Spawning & Executable Resolution**:
+   - Explicit paths are canonicalized against the TaskForge process working directory.
+   - Bare command names are resolved across sanitized `PATH` directories in order, explicitly skipping empty entries and the current working directory to prevent binary hijacking.
+   - Extension comparisons are case-insensitive. Direct invocation of `.cmd` and `.bat` files is rejected (`ERROR_BAD_EXE_FORMAT`).
+   - Calls `CreateProcessW` directly with `lpApplicationName` explicitly set to the resolved absolute path.
+2. **Command-Line Quoting**:
+   - Targets the Microsoft Universal C Runtime (UCRT / `CommandLineToArgvW`) parsing standard.
+   - Converts validated UTF-8 arguments to UTF-16 wide strings.
+   - Applies the $(2N + 1)$ backslash doubling rule preceding quotes and $2N$ doubling rule before closing quotes.
+   - Enforces the Windows 32,767 character buffer limit.
+3. **Restrictive Handle Whitelisting (`STARTUPINFOEXW`)**:
+   - Uses `STARTUPINFOEXW` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.
+   - Whitelists exactly three handles: `hStdInput` (redirected to `NUL`), `hStdOutput` (anonymous pipe write end), and `hStdError` (anonymous pipe write end).
+   - Parent write pipe handles are closed immediately after process creation to guarantee EOF detection.
+4. **Concurrent Pipe Draining & Fatal Error Coordinator Protocol**:
+   - Spawns concurrent stdout and stderr reader threads before process launch, avoiding deadlocks from finite OS pipe buffers (typically 64 KiB).
+   - In-memory output capture is bounded to 10 MiB per stream; excess data is safely discarded while draining continues.
+   - Coordinates fatal read errors via a manual-reset event (`hFatalErrorEvent`), terminating the child if needed, and safely joining all threads before returning.
+   - Process and pipe handles are managed via move-only `AutoHandle` RAII wrappers.
+   - Measures execution duration using `std::chrono::steady_clock`.
 
 ---
 

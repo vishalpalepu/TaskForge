@@ -53,6 +53,7 @@ TEST_CASE("CliApp: Command-line dispatching and exit codes", "[cli]") {
         CHECK(code == static_cast<int>(ExitCode::Success));
         CHECK(out.str().find("TaskForge") != std::string::npos);
         CHECK(out.str().find("validate") != std::string::npos);
+        CHECK(out.str().find("run") != std::string::npos);
     }
 
     SECTION("Unrecognized command reports error with exit code 1") {
@@ -231,4 +232,70 @@ TEST_CASE("CliApp: Command-line dispatching and exit codes", "[cli]") {
         CHECK(captured_output.find("Workflow 'unicode_e2e_cli_wf' is valid (1 task).") != std::string::npos);
 #endif
     }
+
+    SECTION("run without arguments reports error with exit code 1") {
+        int code = app.run({"run"});
+        CHECK(code == static_cast<int>(ExitCode::InvalidUsage));
+        CHECK(err.str().find("requires exactly one manifest file") != std::string::npos);
+    }
+
+    SECTION("run with non-existent file returns exit code 2") {
+        int code = app.run({"run", "missing_file_xyz.json"});
+        CHECK(code == static_cast<int>(ExitCode::FileNotFound));
+        CHECK(err.str().find("Cannot open manifest file") != std::string::npos);
+    }
+
+    SECTION("run with invalid manifest returns exit code 3") {
+        std::string json = R"({
+            "name": "invalid_wf",
+            "tasks": [
+                { "id": "t1", "executable": "echo.exe", "dependencies": ["t1"] }
+            ]
+        })";
+        TempManifestFile temp_file(json, "invalid_wf_test.json");
+        int code = app.run({"run", temp_file.path.string()});
+        CHECK(code == static_cast<int>(ExitCode::ValidationFailed));
+    }
+
+#if defined(_WIN32) && defined(TASKFORGE_TEST_HELPER_PATH)
+    SECTION("run with valid workflow executing test helper succeeds with exit code 0") {
+        std::string helper_u8 = TASKFORGE_TEST_HELPER_PATH;
+        std::replace(helper_u8.begin(), helper_u8.end(), '\\', '/');
+        std::string json = "{\n"
+            "  \"name\": \"cli_run_success\",\n"
+            "  \"tasks\": [\n"
+            "    { \"id\": \"t1\", \"executable\": \"" + helper_u8 + "\", \"arguments\": [\"--stdout\", \"Hello from t1\"] },\n"
+            "    { \"id\": \"t2\", \"executable\": \"" + helper_u8 + "\", \"arguments\": [\"--exit\", \"0\"], \"dependencies\": [\"t1\"] }\n"
+            "  ]\n"
+            "}";
+
+        TempManifestFile temp_file(json, "cli_run_success.json");
+        int code = app.run({"run", temp_file.path.string()});
+        CHECK(code == static_cast<int>(ExitCode::Success));
+        CHECK(out.str().find("[Succeeded] t1") != std::string::npos);
+        CHECK(out.str().find("[Succeeded] t2") != std::string::npos);
+        CHECK(out.str().find("Workflow execution finished: 2 succeeded, 0 failed, 0 blocked.") != std::string::npos);
+    }
+
+    SECTION("run with failing task blocks downstream dependent and preserves independent branch (exit code 4)") {
+        std::string helper_u8 = TASKFORGE_TEST_HELPER_PATH;
+        std::replace(helper_u8.begin(), helper_u8.end(), '\\', '/');
+        std::string json = "{\n"
+            "  \"name\": \"cli_run_failure\",\n"
+            "  \"tasks\": [\n"
+            "    { \"id\": \"fail_task\", \"executable\": \"" + helper_u8 + "\", \"arguments\": [\"--exit\", \"42\"] },\n"
+            "    { \"id\": \"blocked_task\", \"executable\": \"" + helper_u8 + "\", \"dependencies\": [\"fail_task\"] },\n"
+            "    { \"id\": \"independent_task\", \"executable\": \"" + helper_u8 + "\", \"arguments\": [\"--exit\", \"0\"] }\n"
+            "  ]\n"
+            "}";
+
+        TempManifestFile temp_file(json, "cli_run_failure.json");
+        int code = app.run({"run", temp_file.path.string()});
+        CHECK(code == static_cast<int>(ExitCode::ExecutionFailed));
+        CHECK(out.str().find("[Failed] fail_task") != std::string::npos);
+        CHECK(out.str().find("[Blocked] blocked_task") != std::string::npos);
+        CHECK(out.str().find("[Succeeded] independent_task") != std::string::npos);
+        CHECK(out.str().find("Workflow execution finished: 1 succeeded, 1 failed, 1 blocked.") != std::string::npos);
+    }
+#endif
 }
